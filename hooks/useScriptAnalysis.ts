@@ -43,6 +43,7 @@ export interface SceneAnalysis {
     characterNames: string[];
     estimatedDuration: number;
     needsExpansion: boolean; // If VO is long and needs multiple visual scenes
+    isVideoZone?: boolean; // True = first N scenes for video generation, false = static image
     expansionScenes?: {
         visualPrompt: string;
         isBRoll: boolean;
@@ -186,7 +187,8 @@ export function useScriptAnalysis(userApiKey: string | null) {
         director?: DirectorPreset | null,
         researchNotes?: { director?: string; dop?: string; story?: string } | null,
         activeCharacters: { id: string; name: string; description?: string }[] = [], // New Param for auto-assignment
-        sceneCountEstimate?: number // User's desired scene count (optional)
+        sceneCountEstimate?: number, // User's desired scene count (optional)
+        videoZoneConfig?: { enabled: boolean; videoScenes: number; staticScenes: number } // Video/Static Zone split
     ): Promise<ScriptAnalysisResult | null> => {
         if (!userApiKey) {
             setAnalysisError('API key required');
@@ -389,6 +391,21 @@ export function useScriptAnalysis(userApiKey: string | null) {
 
             console.log(`[ScriptAnalysis] Scene count: auto=${autoExpectedCount}, user=${sceneCountEstimate || 'none'}, final=${expectedSceneCount}`);
 
+            // Video Zone / Static Zone config
+            const isVideoZone = videoZoneConfig?.enabled && videoZoneConfig.videoScenes > 0;
+            const videoScenes = videoZoneConfig?.videoScenes || 0;
+            const staticScenes = videoZoneConfig?.staticScenes || 35;
+            const totalZoneScenes = isVideoZone ? (videoScenes + staticScenes) : expectedSceneCount;
+            // Words per second at reading speed (~2.5 words/sec)
+            const wordsPerVideoScene = Math.round(2.5 * 8); // 8 seconds of VO ≈ 20 words
+            const videoZoneWords = isVideoZone ? (videoScenes * wordsPerVideoScene) : 0;
+            const staticZoneWords = isVideoZone ? Math.max(1, wordCount - videoZoneWords) : wordCount;
+            const wordsPerStaticScene = isVideoZone ? Math.ceil(staticZoneWords / staticScenes) : 0;
+
+            if (isVideoZone) {
+                console.log(`[ScriptAnalysis] 🎬 VIDEO ZONE: ${videoScenes} scenes × 8s (${videoZoneWords} words) → STATIC ZONE: ${staticScenes} scenes (${staticZoneWords} words, ~${wordsPerStaticScene} words/scene)`);
+            }
+
             // [New] Existing Character Library - Inject to avoid duplicates
             if (activeCharacters && activeCharacters.length > 0) {
                 const charList = activeCharacters.map(c => `- ${c.name}: ${c.description || 'No description'}`).join('\n');
@@ -519,17 +536,41 @@ Input VO: "He felt the eyes of everyone on him." (Location: Dark Alley)
 Do NOT hide important actions inside B-rolls. They need to be MAIN scenes.
             `;
 
+            // Build Video Zone prompt injection
+            const videoZonePrompt = isVideoZone ? `
+*** 🎬 CRITICAL: VIDEO ZONE / STATIC ZONE SPLIT ***
+The final video has TWO distinct zones:
+
+🎥 VIDEO ZONE (First ${videoScenes} shots): 
+- These shots will be converted to 8-second AI video clips
+- Each shot MUST cover ONLY ~${wordsPerVideoScene} words (~8 seconds of narration)
+- Split the BEGINNING of the script into very granular, detailed shots
+- Focus on: dramatic moments, character introductions, establishing shots
+- These should be the first ~${videoZoneWords} words of the script
+- EVERY sentence with action, emotion, or visual change = SEPARATE shot
+
+🖼️ STATIC ZONE (Remaining ${staticScenes} shots):
+- These shots will be static image frames shown longer
+- Each shot covers ~${wordsPerStaticScene} words of narration
+- Group multiple sentences into ONE shot when they share the same visual
+- Summarize longer passages into single compelling frames
+
+⚠️ TOTAL SHOTS: EXACTLY ${totalZoneScenes} (${videoScenes} video + ${staticScenes} static)
+Label each shot: [VIDEO] Shot 1, [VIDEO] Shot 2, ... [STATIC] Shot ${videoScenes + 1}, ...
+` : '';
+
             const clusteringUserPrompt = `
 Analyze and REWRITE the following voice-over script into a list of "VISUAL SHOTS".
 Don't worry about JSON format yet. Just simple text blocks.
 
-*** HARD CONSTRAINT - TARGET SCENE COUNT: EXACTLY ${expectedSceneCount} shots (±10%) ***
-${sceneCountEstimate ? `⚠️ The user has EXPLICITLY requested ${sceneCountEstimate} scenes. This is NOT a suggestion — it is a HARD REQUIREMENT. You MUST produce between ${Math.floor(sceneCountEstimate * 0.9)} and ${Math.ceil(sceneCountEstimate * 1.1)} shots.` : `Auto-estimated target: ~${expectedSceneCount} shots based on word count and reading speed.`}
+${isVideoZone ? videoZonePrompt : `*** HARD CONSTRAINT - TARGET SCENE COUNT: EXACTLY ${expectedSceneCount} shots (±10%) ***
+${sceneCountEstimate ? `⚠️ The user has EXPLICITLY requested ${sceneCountEstimate} scenes. This is NOT a suggestion — it is a HARD REQUIREMENT. You MUST produce between ${Math.floor(sceneCountEstimate * 0.9)} and ${Math.ceil(sceneCountEstimate * 1.1)} shots.` : `Auto-estimated target: ~${expectedSceneCount} shots based on word count and reading speed.`}`}
 
 RULES FOR HITTING THE TARGET:
-- If you have MORE shots than target: MERGE similar/adjacent shots into one (combine their descriptions)
+${isVideoZone ? `- First ${videoScenes} shots: MICRO-SHOTS (~${wordsPerVideoScene} words each) from the BEGINNING of the script
+- Remaining ${staticScenes} shots: LARGER shots (~${wordsPerStaticScene} words each) for the REST` : `- If you have MORE shots than target: MERGE similar/adjacent shots into one (combine their descriptions)
 - If you have FEWER shots than target: SPLIT long/complex shots into multiple angles
-- Each shot should cover roughly ${Math.ceil(wordCount / expectedSceneCount)} words of the script
+- Each shot should cover roughly ${Math.ceil(wordCount / expectedSceneCount)} words of the script`}
 - Do NOT create micro-shots for single sentences unless dramatically important
 - Prioritize QUALITY over QUANTITY — each shot must be cinematically meaningful
 
@@ -539,10 +580,14 @@ ${scriptText}
 """
 
 OUTPUT FORMAT:
-- Shot 1: [Visual Description] (Covers text: "...")
-- Shot 2: [Visual Description] (Covers text: "...")
+${isVideoZone ? `- [VIDEO] Shot 1: [Visual Description] (Covers text: "...")
+- [VIDEO] Shot 2: [Visual Description] (Covers text: "...")
 ...
-FINAL CHECK: Count your shots. If total is more than ${Math.ceil(expectedSceneCount * 1.1)}, MERGE shots until within range.
+- [STATIC] Shot ${videoScenes + 1}: [Visual Description] (Covers text: "...")
+...` : `- Shot 1: [Visual Description] (Covers text: "...")
+- Shot 2: [Visual Description] (Covers text: "...")
+...`}
+FINAL CHECK: Count your shots. ${isVideoZone ? `You MUST have EXACTLY ${videoScenes} [VIDEO] shots and ${staticScenes} [STATIC] shots = ${totalZoneScenes} total.` : `If total is more than ${Math.ceil(expectedSceneCount * 1.1)}, MERGE shots until within range.`}
             `;
 
             // Call Step 1 (Clustering)
@@ -573,8 +618,14 @@ ${visualPlan}
 """
 
 *** MANDATORY SCENE COUNT CONSTRAINT ***
-TARGET: ${expectedSceneCount} main scenes (±10%). Maximum allowed: ${Math.ceil(expectedSceneCount * 1.1)}.
-${sceneCountEstimate ? `The user explicitly requested ${sceneCountEstimate} scenes. You MUST respect this. Do NOT exceed ${Math.ceil(sceneCountEstimate * 1.1)} scenes in your "scenes" array.` : ''}
+${isVideoZone ? `🎬 VIDEO/STATIC ZONE MODE ACTIVE:
+- Total target: ${totalZoneScenes} scenes (${videoScenes} video zone + ${staticScenes} static zone)
+- First ${videoScenes} scenes = VIDEO ZONE (very short, ~${wordsPerVideoScene} words each, ~8s of narration)
+- Remaining ${staticScenes} scenes = STATIC ZONE (longer, ~${wordsPerStaticScene} words each)
+- The video zone covers the FIRST ~${videoZoneWords} words of the script
+- The static zone covers the REST (~${staticZoneWords} words)
+- Mark each scene with "isVideoZone": true or false in the JSON` : `TARGET: ${expectedSceneCount} main scenes (±10%). Maximum allowed: ${Math.ceil(expectedSceneCount * 1.1)}.
+${sceneCountEstimate ? `The user explicitly requested ${sceneCountEstimate} scenes. You MUST respect this. Do NOT exceed ${Math.ceil(sceneCountEstimate * 1.1)} scenes in your "scenes" array.` : ''}`}
 - If the Visual Plan has more shots than target, MERGE adjacent shots with similar location/action into one scene
 - If you exceed the target, your response will be REJECTED. Merge scenes before outputting.
 - B-Roll expansionScenes do NOT count toward this limit, but keep them minimal (max 1-2 per main scene)
@@ -696,7 +747,8 @@ RESPOND WITH JSON ONLY:
       "visualPrompt": "WIDE SHOT. Rain-soaked street. A silhouette...",
       "chapterId": "chapter_1",
       "characterNames": ["The Man"],
-      "needsExpansion": false
+      "needsExpansion": false,
+      "isVideoZone": true
     },
     {
       "voiceOverText": "The officer approached and spoke.",
@@ -705,10 +757,12 @@ RESPOND WITH JSON ONLY:
       "visualPrompt": "MEDIUM SHOT. Officer pointing...",
       "chapterId": "chapter_1",
       "characterNames": ["Officer", "The Man"],
-      "needsExpansion": false
+      "needsExpansion": false,
+      "isVideoZone": false
     }
   ]
-}`;
+}${isVideoZone ? `\n\n⚠️ CRITICAL: The first ${videoScenes} scenes MUST have "isVideoZone": true. The rest MUST have "isVideoZone": false.` : ''}`;
+
 
             setAnalysisStage('connecting');
             const response = await ai.models.generateContent({

@@ -177,6 +177,11 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
     const [showDirectorPicker, setShowDirectorPicker] = useState(false);
     const [sceneCountEstimate, setSceneCountEstimate] = useState<number | null>(null); // User-adjustable scene count
 
+    // Video Zone / Static Zone config
+    const [videoZoneEnabled, setVideoZoneEnabled] = useState(false);
+    const [videoZoneScenes, setVideoZoneScenes] = useState(30); // Number of scenes for video (8s each)
+    const [staticZoneScenes, setStaticZoneScenes] = useState(35); // Number of scenes for static images
+
     // Research Notes state
     const [showResearchNotes, setShowResearchNotes] = useState(false);
     const [directorNotes, setDirectorNotes] = useState(initialState?.directorNotes || '');
@@ -359,9 +364,10 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                 story: storyContext || undefined // [New]
             } : null,
             existingCharacters, // [Fixed] Check against existing characters
-            sceneCountEstimate || undefined // Pass user's estimated scene count
+            videoZoneEnabled ? (videoZoneScenes + staticZoneScenes) : (sceneCountEstimate || undefined), // Total scene count
+            videoZoneEnabled ? { enabled: true, videoScenes: videoZoneScenes, staticScenes: staticZoneScenes } : undefined
         );
-    }, [scriptText, readingSpeed, selectedModel, analyzeScript, selectedStyle, selectedDirector, directorNotes, dopNotes, storyContext, sceneCountEstimate]);
+    }, [scriptText, readingSpeed, selectedModel, analyzeScript, selectedStyle, selectedDirector, directorNotes, dopNotes, storyContext, sceneCountEstimate, videoZoneEnabled, videoZoneScenes, staticZoneScenes]);
 
     // Handle import
     const handleImport = useCallback(() => {
@@ -836,6 +842,89 @@ John enters the room, wearing a tailored Armani suit..."
                                     <div className="mt-2 text-xs text-zinc-500 text-center">
                                         ~{Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)))} words/scene
                                     </div>
+                                </div>
+
+                                {/* Video Zone / Static Zone Config */}
+                                <div className={`rounded-2xl p-4 border backdrop-blur-sm transition-all ${videoZoneEnabled ? 'bg-gradient-to-br from-blue-900/20 to-purple-900/20 border-blue-500/40' : 'bg-zinc-800/30 border-zinc-700/30'}`}>
+                                    <div className="flex items-center justify-between mb-3">
+                                        <div className="flex items-center gap-2">
+                                            <Film className={`w-4 h-4 ${videoZoneEnabled ? 'text-blue-400' : 'text-zinc-500'}`} />
+                                            <span className="text-sm font-bold text-white uppercase tracking-wider">Video Zone</span>
+                                        </div>
+                                        <button
+                                            onClick={() => setVideoZoneEnabled(!videoZoneEnabled)}
+                                            className={`relative w-10 h-5 rounded-full transition-all ${videoZoneEnabled ? 'bg-blue-500' : 'bg-zinc-600'}`}
+                                        >
+                                            <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${videoZoneEnabled ? 'left-5.5' : 'left-0.5'}`}
+                                                style={{ left: videoZoneEnabled ? '22px' : '2px' }} />
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-zinc-500 mb-3">
+                                        Chia nhỏ đầu script cho video AI (8s/scene), phần còn lại cho ảnh tĩnh.
+                                    </p>
+
+                                    {videoZoneEnabled && (
+                                        <div className="space-y-3 animate-fadeIn">
+                                            {/* Video Scenes */}
+                                            <div className="bg-blue-500/10 rounded-xl p-3 border border-blue-500/20">
+                                                <div className="flex items-center gap-2 mb-2">
+                                                    <span className="text-[10px] font-bold text-blue-300 uppercase tracking-wider">🎥 Video Scenes (8s/cảnh)</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => setVideoZoneScenes(Math.max(5, videoZoneScenes - 5))}
+                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-blue-500/30 hover:border-blue-400 text-white font-bold flex items-center justify-center text-sm transition-colors"
+                                                    >−</button>
+                                                    <input
+                                                        type="number" min={5} max={100}
+                                                        value={videoZoneScenes}
+                                                        onChange={(e) => setVideoZoneScenes(Math.max(5, Math.min(100, parseInt(e.target.value) || 30)))}
+                                                        className="flex-1 bg-zinc-900/80 border border-blue-500/30 rounded-lg px-3 py-1.5 text-center text-sm font-bold text-blue-400 focus:outline-none focus:border-blue-400 transition-colors"
+                                                    />
+                                                    <button
+                                                        onClick={() => setVideoZoneScenes(Math.min(100, videoZoneScenes + 5))}
+                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-blue-500/30 hover:border-blue-400 text-white font-bold flex items-center justify-center text-sm transition-colors"
+                                                    >+</button>
+                                                </div>
+                                                <div className="mt-1 text-[10px] text-blue-400/60 text-center">
+                                                    ≈ {Math.round(videoZoneScenes * 8 / 60)} phút video ({videoZoneScenes} × 8s)
+                                                </div>
+                                            </div>
+
+                                            {/* Static Scenes */}
+                                            <div className="bg-purple-500/10 rounded-xl p-3 border border-purple-500/20">
+                                                <div className="flex items-center gap-2 mb-2">
+                                                    <span className="text-[10px] font-bold text-purple-300 uppercase tracking-wider">🖼️ Static Scenes (ảnh tĩnh)</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => setStaticZoneScenes(Math.max(5, staticZoneScenes - 5))}
+                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-purple-500/30 hover:border-purple-400 text-white font-bold flex items-center justify-center text-sm transition-colors"
+                                                    >−</button>
+                                                    <input
+                                                        type="number" min={5} max={200}
+                                                        value={staticZoneScenes}
+                                                        onChange={(e) => setStaticZoneScenes(Math.max(5, Math.min(200, parseInt(e.target.value) || 35)))}
+                                                        className="flex-1 bg-zinc-900/80 border border-purple-500/30 rounded-lg px-3 py-1.5 text-center text-sm font-bold text-purple-400 focus:outline-none focus:border-purple-400 transition-colors"
+                                                    />
+                                                    <button
+                                                        onClick={() => setStaticZoneScenes(Math.min(200, staticZoneScenes + 5))}
+                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-purple-500/30 hover:border-purple-400 text-white font-bold flex items-center justify-center text-sm transition-colors"
+                                                    >+</button>
+                                                </div>
+                                                <div className="mt-1 text-[10px] text-purple-400/60 text-center">
+                                                    ~{Math.ceil((scriptText.split(/\s+/).filter(Boolean).length - videoZoneScenes * 20) / Math.max(1, staticZoneScenes))} words/scene
+                                                </div>
+                                            </div>
+
+                                            {/* Summary */}
+                                            <div className="bg-zinc-900/50 rounded-lg p-2 text-center">
+                                                <span className="text-xs text-zinc-400">
+                                                    Tổng: <span className="text-blue-400 font-bold">{videoZoneScenes}</span> video + <span className="text-purple-400 font-bold">{staticZoneScenes}</span> static = <span className="text-emerald-400 font-bold">{videoZoneScenes + staticZoneScenes}</span> scenes
+                                                </span>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Character Style Card - Compact */}

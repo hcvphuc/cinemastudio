@@ -17,8 +17,6 @@ import { GoogleGenAI } from "@google/genai";
 import { generateId } from '../../utils/helpers';
 import { processScriptToParts, getElevenLabsZipFilename } from '../../utils/elevenLabsFormatter';
 
-declare const JSZip: any;
-
 interface ManualScriptModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -248,14 +246,20 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
         setExportProgress('Splitting script...');
         try {
             console.log('[ManualScript] Exporting ElevenLabs VO with AI (per-PART)...');
+            console.log('[ManualScript] API Key:', userApiKey.substring(0, 8) + '...');
+            console.log('[ManualScript] Script length:', scriptText.length, 'chars');
+
             const partFiles = await processScriptToParts(scriptText, userApiKey, {
                 stripAfterEnd: true,
-            });
+            }, setExportProgress);
 
             setExportProgress(`Packaging ${partFiles.length} files...`);
+            console.log('[ManualScript] Got', partFiles.length, 'part files, packaging...');
 
-            // Package into ZIP
-            if (typeof JSZip === 'undefined' || !JSZip) {
+            // Package into ZIP using window.JSZip
+            const JSZipLib = (window as any).JSZip;
+            if (!JSZipLib) {
+                console.log('[ManualScript] JSZip not available, downloading individual files');
                 // Fallback: download individual files
                 for (const pf of partFiles) {
                     const blob = new Blob([pf.content], { type: 'text/plain;charset=utf-8' });
@@ -269,7 +273,7 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                     URL.revokeObjectURL(url);
                 }
             } else {
-                const zip = new JSZip();
+                const zip = new JSZipLib();
                 for (const pf of partFiles) {
                     zip.file(pf.filename, pf.content);
                 }
@@ -284,10 +288,11 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                 URL.revokeObjectURL(url);
             }
 
-            console.log(`[ManualScript] Exported ${partFiles.length} ElevenLabs VO files`);
-        } catch (err) {
+            console.log(`[ManualScript] ✅ Exported ${partFiles.length} ElevenLabs VO files`);
+        } catch (err: any) {
             console.error('[ManualScript] ElevenLabs export error:', err);
-            alert('Export VO thất bại. Vui lòng kiểm tra API key và thử lại.');
+            const errMsg = err?.message || err?.toString() || 'Unknown error';
+            alert(`Export VO thất bại:\n${errMsg}\n\nVui lòng kiểm tra API key và console log.`);
         } finally {
             setIsExportingVO(false);
             setExportProgress('');

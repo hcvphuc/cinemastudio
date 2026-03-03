@@ -259,7 +259,8 @@ ${content}`;
 export async function processScriptToParts(
     scriptText: string,
     apiKey: string,
-    userConfig?: Partial<ElevenLabsConfig>
+    userConfig?: Partial<ElevenLabsConfig>,
+    onProgress?: (msg: string) => void
 ): Promise<PartFile[]> {
     const config = { ...DEFAULT_CONFIG, ...userConfig };
     const maxChars = config.maxCharsPerFile || 4000;
@@ -277,6 +278,7 @@ export async function processScriptToParts(
 
     for (let i = 0; i < parts.length; i++) {
         const part = parts[i];
+        onProgress?.(`AI: ${part.partLabel} (${i + 1}/${parts.length})...`);
         const formatted = await formatPartWithAI(ai, modelName, part.partLabel, part.content);
         const safeLabel = part.partLabel.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, '_');
 

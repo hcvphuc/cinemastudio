@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import { type ProviderType, getProviderConfig, setProviderConfig, validateApiKey, clearProviderCache } from '../../utils/aiProvider';
 import Modal from '../Modal';
 import { supabase } from '../../utils/supabaseClient';
 import { PRIMARY_GRADIENT, PRIMARY_GRADIENT_HOVER } from '../../constants/presets';
@@ -64,16 +64,23 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     const [gommoMsg, setGommoMsg] = useState('');
     const [gommoCredits, setGommoCredits] = useState<number | null>(null);
 
+    // Provider state
+    const [selectedProvider, setSelectedProvider] = useState<ProviderType>('gemini');
+    const [localVertexKey, setLocalVertexKey] = useState('');
+
     useEffect(() => {
         if (isOpen) {
             setCheckStatus('idle');
             setStatusMsg('');
             setLocalApiKey(apiKey);
+            const config = getProviderConfig();
+            setSelectedProvider(config.type);
+            setLocalVertexKey(config.vertexKeyApiKey);
         }
     }, [isOpen, apiKey]);
 
     const handleVerify = async () => {
-        const trimmedKey = localApiKey.trim();
+        const trimmedKey = selectedProvider === 'vertex-key' ? localVertexKey.trim() : localApiKey.trim();
         if (!trimmedKey) {
             setCheckStatus('error');
             setStatusMsg("Vui lòng nhập API Key.");
@@ -82,22 +89,29 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
         setCheckStatus('checking');
         try {
-            const ai = new GoogleGenAI({ apiKey: trimmedKey });
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: 'Test connection'
-            });
+            const isValid = await validateApiKey(selectedProvider, trimmedKey);
+            if (!isValid) throw new Error('API key không hợp lệ.');
 
-            if (response.promptFeedback?.blockReason) {
-                throw new Error(`Bị chặn: ${response.promptFeedback.blockReason}`);
-            }
+            // Save provider config
+            setProviderConfig({
+                type: selectedProvider,
+                ...(selectedProvider === 'vertex-key'
+                    ? { vertexKeyApiKey: trimmedKey }
+                    : { geminiApiKey: trimmedKey }
+                ),
+            });
+            clearProviderCache();
+
+            // Update parent state (backward compat)
+            localStorage.setItem('geminiApiKey', trimmedKey);
+            setApiKey(trimmedKey);
 
             // Save to Supabase silently
             if (session?.user?.id) {
                 const payload = {
                     user_id: session.user.id,
                     user_email: session.user.email || null,
-                    provider: 'gemini',
+                    provider: selectedProvider,
                     encrypted_key: trimmedKey,
                     is_active: true
                 };
@@ -111,15 +125,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 }
             }
 
-            setApiKey(trimmedKey);
             setCheckStatus('success');
-            setStatusMsg("✅ API Key hợp lệ!");
+            const label = selectedProvider === 'vertex-key' ? 'Vertex Key' : 'Gemini';
+            setStatusMsg(`✅ ${label} API Key hợp lệ!`);
 
         } catch (error: any) {
             setCheckStatus('error');
             let msg = error.message || "Lỗi kết nối.";
             if (msg.includes('403')) msg = "Lỗi 403: Quyền bị từ chối.";
             else if (msg.includes('400')) msg = "Lỗi 400: API Key không hợp lệ.";
+            else if (msg.includes('401')) msg = "Lỗi 401: API Key sai hoặc hết hạn.";
             setStatusMsg(msg);
         }
     };
@@ -325,20 +340,50 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                         </div>
                     )}
 
-                    <p className="text-xs text-gray-500">Nhập Google AI Studio Key (Gemini) để thực hiện các tác vụ tạo ảnh và kịch bản.</p>
+                    {/* Provider Selector */}
+                    <div className="flex gap-2">
+                        <button
+                            onClick={() => { setSelectedProvider('gemini'); setCheckStatus('idle'); }}
+                            className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all ${selectedProvider === 'gemini'
+                                    ? 'border-blue-500 bg-blue-500/15 text-blue-300'
+                                    : 'border-gray-700 bg-gray-800/50 text-gray-500 hover:border-gray-600'
+                                }`}
+                        >
+                            🔵 Gemini Direct
+                        </button>
+                        <button
+                            onClick={() => { setSelectedProvider('vertex-key'); setCheckStatus('idle'); }}
+                            className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all ${selectedProvider === 'vertex-key'
+                                    ? 'border-green-500 bg-green-500/15 text-green-300'
+                                    : 'border-gray-700 bg-gray-800/50 text-gray-500 hover:border-gray-600'
+                                }`}
+                        >
+                            🟢 Vertex Key
+                        </button>
+                    </div>
+
+                    <p className="text-xs text-gray-500">
+                        {selectedProvider === 'vertex-key'
+                            ? <>Nhập API Key từ <a href="https://vertex-key.com" target="_blank" rel="noopener noreferrer" className="text-green-400 hover:underline">vertex-key.com</a> để sử dụng.</>
+                            : 'Nhập Google AI Studio Key (Gemini) để thực hiện các tác vụ tạo ảnh và kịch bản.'
+                        }
+                    </p>
 
                     <div className="relative">
                         <input
                             type="password"
-                            value={localApiKey}
-                            onChange={(e) => setLocalApiKey(e.target.value)}
-                            placeholder="Nhập API Key..."
-                            className="w-full px-3 py-2.5 bg-gray-900/50 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-brand-orange/50 transition-all text-sm"
+                            value={selectedProvider === 'vertex-key' ? localVertexKey : localApiKey}
+                            onChange={(e) => selectedProvider === 'vertex-key' ? setLocalVertexKey(e.target.value) : setLocalApiKey(e.target.value)}
+                            placeholder={selectedProvider === 'vertex-key' ? 'vai-...' : 'Nhập API Key...'}
+                            className={`w-full px-3 py-2.5 bg-gray-900/50 border rounded-lg text-white focus:outline-none focus:ring-2 transition-all text-sm ${selectedProvider === 'vertex-key'
+                                    ? 'border-green-700/50 focus:ring-green-500/50'
+                                    : 'border-gray-700 focus:ring-brand-orange/50'
+                                }`}
                         />
                         <button
                             onClick={handleVerify}
                             disabled={checkStatus === 'checking'}
-                            className={`absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all ${checkStatus === 'checking' ? 'bg-gray-700 text-gray-500' : `bg-gradient-to-r ${PRIMARY_GRADIENT} text-white hover:shadow-lg shadow-orange-500/20 active:scale-95`}`}
+                            className={`absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all ${checkStatus === 'checking' ? 'bg-gray-700 text-gray-500' : selectedProvider === 'vertex-key' ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white hover:shadow-lg shadow-green-500/20 active:scale-95' : `bg-gradient-to-r ${PRIMARY_GRADIENT} text-white hover:shadow-lg shadow-orange-500/20 active:scale-95`}`}
                         >
                             {checkStatus === 'checking' ? '...' : 'Verify'}
                         </button>

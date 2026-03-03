@@ -142,6 +142,9 @@ export const IMAGE_MODELS = [
 
     // Gemini Direct
     { value: 'gemini-3-pro-image-preview', label: '🔵 Nano Banana Pro', provider: 'gemini', description: 'Gemini Direct - Via Google AI Studio API', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gemini-3.1-flash-image-1k', label: '🔵 Gemini 3.1 Flash Image 1K', provider: 'gemini', description: '1408×768 • $0.40/req', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gemini-3.1-flash-image-2k', label: '🔵 Gemini 3.1 Flash Image 2K', provider: 'gemini', description: '2816×1536 • $0.55/req', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gemini-3.1-flash-image-4k', label: '🔵 Gemini 3.1 Flash Image 4K', provider: 'gemini', description: '5632×3072 • $0.70/req', supportsEdit: true, supportsSubject: true, group: 'edit' },
 
     // Google Imagen via Gommo (EDIT)
     { value: 'google_image_gen_banana_pro', label: '🟡 Nano Banana Pro', provider: 'gommo', description: 'Google - 1k/2k/4k - 300 credits', supportsEdit: true, supportsSubject: true, group: 'edit' },

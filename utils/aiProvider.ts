@@ -196,8 +196,11 @@ const VERTEX_KEY_MODEL_MAP: Record<string, string> = {
     'gemini-2.0-flash': 'flash/gemini-2.0-flash',
     'gemini-2.0-flash-exp': 'flash/gemini-2.0-flash',
     'gemini-3-pro-preview': 'pro/gemini-3-pro-preview',
-    // Image models (not supported via chat completions)
+    // Image models
     'gemini-3-pro-image-preview': 'pro/gemini-3-pro-image-preview',
+    'gemini-3.1-flash-image-1k': 'flash/gemini-3.1-flash-image-1k',
+    'gemini-3.1-flash-image-2k': 'flash/gemini-3.1-flash-image-2k',
+    'gemini-3.1-flash-image-4k': 'flash/gemini-3.1-flash-image-4k',
 };
 
 function mapModelToVertexKey(geminiModel: string): string {

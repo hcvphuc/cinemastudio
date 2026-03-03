@@ -351,7 +351,13 @@ export function useImageGeneration(
             if (prompt) fullParts.push({ text: prompt }); // Text FIRST per docs
             fullParts.push(...parts); // Then all image references
 
-            console.log(`[ImageGen] Generating with resolution: ${imageSize}, aspectRatio: ${aspectRatio}, parts: ${fullParts.length}`);
+            // Auto-detect resolution from flash-image model names
+            let effectiveImageSize = imageSize || '1K';
+            if (model.includes('flash-image-4k')) effectiveImageSize = '4K';
+            else if (model.includes('flash-image-2k')) effectiveImageSize = '2K';
+            else if (model.includes('flash-image-1k')) effectiveImageSize = '1K';
+
+            console.log(`[ImageGen] Generating with model: ${model}, resolution: ${effectiveImageSize}, aspectRatio: ${aspectRatio}, parts: ${fullParts.length}`);
 
             // Wrap API call with retry for transient errors (500, 503)
             const response = await withRetry(async () => {
@@ -362,7 +368,7 @@ export function useImageGeneration(
                         responseModalities: ["IMAGE"], // Enforce Image output
                         imageConfig: {
                             aspectRatio: aspectRatio || "16:9",
-                            imageSize: imageSize || '1K' // Pass resolution to API
+                            imageSize: effectiveImageSize || '1K' // Pass resolution to API
                         }
                     },
                 });

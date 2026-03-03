@@ -9,7 +9,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import { getAIProvider } from '../utils/aiProvider';
 import { Scene, SceneGroup, Character, CharacterStyleDefinition } from '../types';
 import { DirectorPreset, DIRECTOR_PRESETS } from '../constants/directors';
 import { resolveStyleWithInheritance } from '../constants/characterStyles';
@@ -200,7 +200,7 @@ export function useScriptAnalysis(userApiKey: string | null) {
         setAnalysisError(null);
 
         try {
-            const ai = new GoogleGenAI({ apiKey: userApiKey });
+            const provider = getAIProvider(userApiKey);
             const wpm = readingSpeed === 'slow' ? WPM_SLOW : readingSpeed === 'fast' ? WPM_FAST : WPM_MEDIUM;
             const wordCount = scriptText.split(/\s+/).length;
             const estimatedTotalDuration = Math.ceil((wordCount / wpm) * 60);
@@ -592,11 +592,11 @@ FINAL CHECK: Count your shots. ${isVideoZone ? `You MUST have EXACTLY ${videoSce
 
             // Call Step 1 (Clustering)
             // Use gemini-2.5-flash for speed if not generating JSON
-            const clusteringResponse = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: [{ role: 'user', parts: [{ text: clusteringSystemPrompt + "\n\n" + clusteringUserPrompt }] }]
-            });
-            const visualPlan = clusteringResponse.text || '';
+            const clusteringResult = await provider.generateText(
+                clusteringSystemPrompt + "\n\n" + clusteringUserPrompt,
+                { model: 'gemini-2.5-flash' }
+            );
+            const visualPlan = clusteringResult.text || '';
             console.log('[ScriptAnalysis] 🧠 Visual Plan:', visualPlan);
 
 
@@ -765,21 +765,16 @@ RESPOND WITH JSON ONLY:
 
 
             setAnalysisStage('connecting');
-            const response = await ai.models.generateContent({
+            const jsonResult = await provider.generateText(prompt, {
                 model: modelName,
-                contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                config: {
-                    temperature: 0.3,
-                    responseMimeType: 'application/json',
-                    maxOutputTokens: 65536,
-                    ...(thinkingBudget && {
-                        thinkingConfig: { thinkingBudget }
-                    })
-                }
+                temperature: 0.3,
+                responseMimeType: 'application/json',
+                maxOutputTokens: 65536,
+                ...(thinkingBudget ? { thinkingConfig: { thinkingBudget } } : {})
             });
 
             setAnalysisStage('post-processing');
-            const text = response.text || '';
+            const text = jsonResult.text || '';
             const jsonMatch = text.match(/\{[\s\S]*\}/);
             if (!jsonMatch) throw new Error('No JSON in response');
 

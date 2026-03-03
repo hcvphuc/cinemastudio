@@ -128,12 +128,42 @@ function formatSimple(cleanedText: string): string {
     return result.join('\n');
 }
 
-/**
- * AI-powered formatter: uses Gemini to add rich per-sentence audio tags
- */
 async function formatWithAI(cleanedText: string, apiKey: string, model?: string): Promise<string> {
     const ai = new GoogleGenAI({ apiKey });
+    const modelName = model || 'gemini-2.0-flash';
 
+    // For very long scripts, process in chunks
+    const paragraphs = cleanedText.split('\n\n');
+    const MAX_CHUNK_PARAGRAPHS = 40;
+
+    // If script is short enough, process in one go
+    if (paragraphs.length <= MAX_CHUNK_PARAGRAPHS) {
+        return await processChunkWithAI(ai, modelName, cleanedText);
+    }
+
+    // Split into chunks and process each
+    console.log(`[ElevenLabs] Script has ${paragraphs.length} paragraphs, splitting into chunks...`);
+    const chunks: string[] = [];
+    for (let i = 0; i < paragraphs.length; i += MAX_CHUNK_PARAGRAPHS) {
+        chunks.push(paragraphs.slice(i, i + MAX_CHUNK_PARAGRAPHS).join('\n\n'));
+    }
+
+    const results: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+        console.log(`[ElevenLabs] Processing chunk ${i + 1}/${chunks.length}...`);
+        try {
+            const result = await processChunkWithAI(ai, modelName, chunks[i]);
+            results.push(result);
+        } catch (err) {
+            console.error(`[ElevenLabs] Chunk ${i + 1} failed, using simple format:`, err);
+            results.push(formatSimple(chunks[i]));
+        }
+    }
+
+    return results.join('\n\n---\n\n');
+}
+
+async function processChunkWithAI(ai: GoogleGenAI, modelName: string, text: string): Promise<string> {
     const prompt = `You are an expert audio director for ElevenLabs Text-to-Speech narration.
 
 Your task: Take the following script and add inline audio direction tags to make it sound like a PREMIUM YouTube true crime / storytelling narration.
@@ -162,7 +192,9 @@ Your task: Take the following script and add inline audio direction tags to make
 
 10. Every paragraph should have at least one emotion tag at the start and strategic pauses within.
 
-## EXAMPLE OUTPUT FORMAT:
+11. Output ONLY the enhanced script. No explanations, no markdown code blocks, no headers.
+
+## EXAMPLE OUTPUT:
 [cold, deliberate] THE FALL OF THE GHOST. [calculated pause] THE END OF THE ARCHITECT.
 
 [tense, low voice] February 22, 2026. [strategic pause] 6:47 AM. [inhales] Tapalpa, Jalisco.
@@ -173,31 +205,35 @@ Six tactical aircraft. tear through the thick fog over the Sierra Madre mountain
 
 [thoughtful, investigative] Part One. [pause] The Harvest. [inhales]
 
-[low, revealing] 1977. [pause] Naranjo de Chila, Michoacán. [calculating] A town so remote. it doesn't appear on MOST maps.
+[low, revealing] 1977. [pause] A town so remote. it doesn't appear on MOST maps.
 
 ## INPUT SCRIPT:
-${cleanedText}
-
-## OUTPUT (audio-directed script only, no explanations):`;
+${text}`;
 
     try {
         const response = await ai.models.generateContent({
-            model: model || 'gemini-2.0-flash',
-            contents: prompt,
+            model: modelName,
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
             config: {
                 temperature: 0.7,
                 maxOutputTokens: 65536,
             }
         });
 
-        const text = response.text?.trim();
-        if (text) return text;
+        let result = response.text?.trim() || '';
+
+        // Strip markdown code blocks if AI wrapped it
+        if (result.startsWith('```')) {
+            result = result.replace(/^```\w*\n?/, '').replace(/\n?```$/, '').trim();
+        }
+
+        if (result.length > 0) return result;
     } catch (err) {
         console.error('[ElevenLabs Formatter] AI formatting failed:', err);
     }
 
     // Fallback to simple formatting
-    return formatSimple(cleanedText);
+    return formatSimple(text);
 }
 
 /**

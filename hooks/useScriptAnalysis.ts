@@ -201,6 +201,7 @@ export function useScriptAnalysis(userApiKey: string | null) {
 
         try {
             const provider = getAIProvider(userApiKey);
+            console.log(`[ScriptAnalysis] 🔑 Provider: ${provider.type}, Key: ${userApiKey?.substring(0, 10)}..., userApiKey length: ${userApiKey?.length || 0}`);
             const wpm = readingSpeed === 'slow' ? WPM_SLOW : readingSpeed === 'fast' ? WPM_FAST : WPM_MEDIUM;
             const wordCount = scriptText.split(/\s+/).length;
             const estimatedTotalDuration = Math.ceil((wordCount / wpm) * 60);
@@ -965,7 +966,15 @@ RESPOND WITH JSON ONLY:
 
         } catch (error: any) {
             console.error('[ScriptAnalysis] ❌ Error:', error);
-            setAnalysisError(error.message || 'Analysis failed');
+            console.error('[ScriptAnalysis] ❌ Provider info:', {
+                userApiKeyPrefix: userApiKey?.substring(0, 10),
+                userApiKeyLength: userApiKey?.length,
+                errorName: error?.name,
+                errorMessage: error?.message,
+                errorStack: error?.stack?.substring(0, 200)
+            });
+            const debugInfo = `[Provider: ${userApiKey?.startsWith('vai-') ? 'vertex-key' : 'gemini'}, Key: ${userApiKey?.substring(0, 8)}..., Length: ${userApiKey?.length || 0}]`;
+            setAnalysisError(`${error.message || 'Analysis failed'} ${debugInfo}`);
             return null;
         } finally {
             setIsAnalyzing(false);

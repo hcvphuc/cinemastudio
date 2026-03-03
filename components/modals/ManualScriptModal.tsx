@@ -15,7 +15,7 @@ import { useScriptAnalysis, ScriptAnalysisResult } from '../../hooks/useScriptAn
 import { useResearchPresets, ResearchPreset } from '../../hooks/useResearchPresets';
 import { GoogleGenAI } from "@google/genai";
 import { generateId } from '../../utils/helpers';
-import { formatForElevenLabs, getElevenLabsFilename } from '../../utils/elevenLabsFormatter';
+import { formatForElevenLabs, formatForElevenLabsSync, getElevenLabsFilename } from '../../utils/elevenLabsFormatter';
 
 interface ManualScriptModalProps {
     isOpen: boolean;
@@ -231,21 +231,53 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
         input.click();
     }, []);
 
+    // State for ElevenLabs export loading
+    const [isExportingVO, setIsExportingVO] = useState(false);
+
     // Handler for exporting ElevenLabs-ready voiceover text
-    const handleExportElevenLabsVO = useCallback(() => {
+    const handleExportElevenLabsVO = useCallback(async () => {
         if (!scriptText.trim()) return;
-        const formatted = formatForElevenLabs(scriptText);
-        const blob = new Blob([formatted], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = getElevenLabsFilename();
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        console.log(`[ManualScript] Exported ElevenLabs VO (${formatted.length} chars)`);
-    }, [scriptText]);
+        setIsExportingVO(true);
+        try {
+            let formatted: string;
+            if (userApiKey) {
+                console.log('[ManualScript] Exporting ElevenLabs VO with AI enhancement...');
+                formatted = await formatForElevenLabs(scriptText, {
+                    useAI: true,
+                    apiKey: userApiKey,
+                    stripAfterEnd: true,
+                });
+            } else {
+                console.log('[ManualScript] Exporting ElevenLabs VO (simple mode, no API key)...');
+                formatted = formatForElevenLabsSync(scriptText);
+            }
+            const blob = new Blob([formatted], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = getElevenLabsFilename();
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            console.log(`[ManualScript] Exported ElevenLabs VO (${formatted.length} chars)`);
+        } catch (err) {
+            console.error('[ManualScript] ElevenLabs export error:', err);
+            // Fallback to sync
+            const formatted = formatForElevenLabsSync(scriptText);
+            const blob = new Blob([formatted], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = getElevenLabsFilename();
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } finally {
+            setIsExportingVO(false);
+        }
+    }, [scriptText, userApiKey]);
 
     // [NEW] Notify parent of state changes for persistence
     React.useEffect(() => {
@@ -475,10 +507,21 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                                         {scriptText.trim() && (
                                             <button
                                                 onClick={handleExportElevenLabsVO}
-                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 rounded-lg text-xs font-medium hover:bg-emerald-600/40 hover:border-emerald-500/50 transition-all"
-                                                title="Export voiceover text optimized for ElevenLabs TTS"
+                                                disabled={isExportingVO}
+                                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${isExportingVO
+                                                        ? 'bg-emerald-600/10 border border-emerald-500/20 text-emerald-400/60 cursor-wait'
+                                                        : 'bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/40 hover:border-emerald-500/50'
+                                                    }`}
+                                                title="Export voiceover text optimized for ElevenLabs TTS (AI-enhanced)"
                                             >
-                                                📥 Export VO
+                                                {isExportingVO ? (
+                                                    <>
+                                                        <div className="w-3 h-3 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+                                                        AI Processing...
+                                                    </>
+                                                ) : (
+                                                    <>📥 Export VO</>
+                                                )}
                                             </button>
                                         )}
                                     </div>

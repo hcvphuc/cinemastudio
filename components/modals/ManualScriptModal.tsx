@@ -15,7 +15,9 @@ import { useScriptAnalysis, ScriptAnalysisResult } from '../../hooks/useScriptAn
 import { useResearchPresets, ResearchPreset } from '../../hooks/useResearchPresets';
 import { GoogleGenAI } from "@google/genai";
 import { generateId } from '../../utils/helpers';
-import { formatForElevenLabs, formatForElevenLabsSync, getElevenLabsFilename } from '../../utils/elevenLabsFormatter';
+import { processScriptToParts, processScriptToPartsSync, getElevenLabsZipFilename } from '../../utils/elevenLabsFormatter';
+
+declare const JSZip: any;
 
 interface ManualScriptModalProps {
     isOpen: boolean;
@@ -233,49 +235,78 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
 
     // State for ElevenLabs export loading
     const [isExportingVO, setIsExportingVO] = useState(false);
+    const [exportProgress, setExportProgress] = useState('');
 
-    // Handler for exporting ElevenLabs-ready voiceover text
+    // Handler for exporting ElevenLabs-ready voiceover as ZIP (1 file per PART)
     const handleExportElevenLabsVO = useCallback(async () => {
         if (!scriptText.trim()) return;
         setIsExportingVO(true);
+        setExportProgress('Splitting script...');
         try {
-            let formatted: string;
+            let partFiles;
             if (userApiKey) {
-                console.log('[ManualScript] Exporting ElevenLabs VO with AI enhancement...');
-                formatted = await formatForElevenLabs(scriptText, {
+                console.log('[ManualScript] Exporting ElevenLabs VO with AI (per-PART)...');
+                partFiles = await processScriptToParts(scriptText, {
                     useAI: true,
                     apiKey: userApiKey,
                     stripAfterEnd: true,
                 });
             } else {
-                console.log('[ManualScript] Exporting ElevenLabs VO (simple mode, no API key)...');
-                formatted = formatForElevenLabsSync(scriptText);
+                console.log('[ManualScript] Exporting ElevenLabs VO (simple mode)...');
+                partFiles = processScriptToPartsSync(scriptText);
             }
-            const blob = new Blob([formatted], { type: 'text/plain;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = getElevenLabsFilename();
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-            console.log(`[ManualScript] Exported ElevenLabs VO (${formatted.length} chars)`);
+
+            setExportProgress(`Packaging ${partFiles.length} files...`);
+
+            // Package into ZIP
+            if (typeof JSZip === 'undefined' || !JSZip) {
+                // Fallback: download individual files
+                for (const pf of partFiles) {
+                    const blob = new Blob([pf.content], { type: 'text/plain;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = pf.filename;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                }
+            } else {
+                const zip = new JSZip();
+                for (const pf of partFiles) {
+                    zip.file(pf.filename, pf.content);
+                }
+                const zipBlob = await zip.generateAsync({ type: 'blob' });
+                const url = URL.createObjectURL(zipBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = getElevenLabsZipFilename();
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }
+
+            console.log(`[ManualScript] Exported ${partFiles.length} ElevenLabs VO files`);
         } catch (err) {
             console.error('[ManualScript] ElevenLabs export error:', err);
-            // Fallback to sync
-            const formatted = formatForElevenLabsSync(scriptText);
-            const blob = new Blob([formatted], { type: 'text/plain;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = getElevenLabsFilename();
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            // Fallback to sync simple
+            const partFiles = processScriptToPartsSync(scriptText);
+            for (const pf of partFiles) {
+                const blob = new Blob([pf.content], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = pf.filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }
         } finally {
             setIsExportingVO(false);
+            setExportProgress('');
         }
     }, [scriptText, userApiKey]);
 
@@ -509,15 +540,15 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                                                 onClick={handleExportElevenLabsVO}
                                                 disabled={isExportingVO}
                                                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${isExportingVO
-                                                        ? 'bg-emerald-600/10 border border-emerald-500/20 text-emerald-400/60 cursor-wait'
-                                                        : 'bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/40 hover:border-emerald-500/50'
+                                                    ? 'bg-emerald-600/10 border border-emerald-500/20 text-emerald-400/60 cursor-wait'
+                                                    : 'bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/40 hover:border-emerald-500/50'
                                                     }`}
                                                 title="Export voiceover text optimized for ElevenLabs TTS (AI-enhanced)"
                                             >
                                                 {isExportingVO ? (
                                                     <>
                                                         <div className="w-3 h-3 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
-                                                        AI Processing...
+                                                        {exportProgress || 'Processing...'}
                                                     </>
                                                 ) : (
                                                     <>📥 Export VO</>

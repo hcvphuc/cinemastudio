@@ -89,8 +89,17 @@ const migrateCharacter = (char: any): Character => {
 };
 
 const migrateScene = (scene: any): Scene => {
+  // Auto-fill voiceover from existing text fields if not present
+  // Priority: voiceOverText (original VO) → language1 → vietnamese → contextDescription
+  let voiceover = scene.voiceover;
+  if (!voiceover && (scene.voiceOverText || scene.language1 || scene.vietnamese || scene.contextDescription)) {
+    voiceover = scene.voiceOverText || scene.language1 || scene.vietnamese || scene.contextDescription || '';
+    console.log(`[Migration] Scene ${scene.sceneNumber || scene.id}: auto-filled voiceover from existing text`);
+  }
+
   return {
     ...scene,
+    voiceover,
     veoPrompt: scene.veoPrompt || '' // Default empty string if missing
   };
 };

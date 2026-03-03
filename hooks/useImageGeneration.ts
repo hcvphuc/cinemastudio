@@ -9,7 +9,7 @@ import {
 import { DIRECTOR_PRESETS, DirectorCategory } from '../constants/directors';
 import { getPresetById } from '../utils/scriptPresets';
 import { uploadImageToSupabase, syncUserStatsToCloud } from '../utils/storageUtils';
-import { safeGetImageData, callGeminiVisionReasoning, preWarmImageCache, fixMimeType } from '../utils/geminiUtils';
+import { safeGetImageData, callGeminiVisionReasoning, preWarmImageCache, fixMimeType, base64ToBlobUrl } from '../utils/geminiUtils';
 import { GommoAI, urlToBase64 } from '../utils/gommoAI';
 import { IMAGE_MODELS } from '../utils/appConstants';
 import { normalizePrompt, normalizePromptAsync, formatNormalizationLog, needsNormalization, containsVietnamese } from '../utils/promptNormalizer';
@@ -302,10 +302,16 @@ export function useImageGeneration(
                     }
                 });
 
-                // Convert CDN URL to base64 for consistency with existing code
+                // Convert CDN URL to blob URL for memory efficiency
                 const base64Image = await urlToBase64(cdnUrl);
                 console.log('[ImageGen] ✅ Gommo image generated successfully');
-
+                // Convert to Blob URL to save RAM
+                if (base64Image.startsWith('data:')) {
+                    const match = base64Image.match(/^data:([^;]+);base64,(.+)$/);
+                    if (match) {
+                        return { imageUrl: base64ToBlobUrl(match[2], match[1]) };
+                    }
+                }
                 return { imageUrl: base64Image };
             } catch (error: any) {
                 console.error('[ImageGen] ❌ Gommo generation failed:', error.message);
@@ -328,7 +334,15 @@ export function useImageGeneration(
         // GEMINI PATH: Full multi-modal generation with image references
         // ═══════════════════════════════════════════════════════════════
         // Use Gemini API for all Gemini-provider models
-        if (apiKey && provider === 'gemini') {
+        if (provider === 'gemini') {
+            if (!apiKey) {
+                if (gommoCredentials?.accessToken) {
+                    throw new Error("Bạn đang chọn Model ảnh của hệ thống Gemini, nhưng chỉ mới nhập Key của Gommo. Vui lòng vào Cài đặt đổi Ảnh Model sang một Model của Gommo (có chữ 🟡), hoặc nhập thêm Gemini API Key.");
+                } else {
+                    throw new Error("Missing Credentials (API Key bật Gemini hoặc Gommo Token để dùng các model Gommo)");
+                }
+            }
+
             console.log('[ImageGen] 🔵 Using GEMINI provider');
             const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
 
@@ -356,13 +370,14 @@ export function useImageGeneration(
 
             const imagePart = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData);
             if (imagePart?.inlineData) {
-                return { imageUrl: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}` };
+                // Convert to Blob URL to save memory (from ~3MB base64 string to ~50 byte pointer)
+                return { imageUrl: base64ToBlobUrl(imagePart.inlineData.data, imagePart.inlineData.mimeType) };
             } else {
                 throw new Error("Không nhận được ảnh từ API.");
             }
-        } else {
-            throw new Error("Missing Credentials (API Key hoặc Gommo Token)");
         }
+
+        throw new Error("Provider không hợp lệ hoặc thiếu Model.");
     };
 
     // referenceImage: Optional image URL to use as visual DNA reference (from another scene)
@@ -1685,7 +1700,7 @@ IGNORE any prior text descriptions if they conflict with this visual DNA.` });
             let variants: string[] = [];
 
             // [MJ FIX] Detect Midjourney grid and split into 4 images
-            if (isGridModel(modelToUse) && rawImageUrl.startsWith('data:image')) {
+            if (isGridModel(modelToUse) && (rawImageUrl.startsWith('data:image') || rawImageUrl.startsWith('blob:'))) {
                 try {
                     console.log('[ImageGen] 🧩 Midjourney grid detected, splitting...');
                     variants = await splitImageGrid(rawImageUrl);

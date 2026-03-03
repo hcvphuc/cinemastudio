@@ -4,10 +4,31 @@ import { GoogleGenAI } from "@google/genai";
 // IMAGE CACHE - Avoids re-fetching same images during generation
 // ═══════════════════════════════════════════════════════════════
 const imageCache = new Map<string, { data: string; mimeType: string }>();
-const CACHE_MAX_SIZE = 100; // Increased from 50
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes (was 5 min) - longer session support
+const CACHE_MAX_SIZE = 20; // Reduced from 100 to limit memory usage
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes (reduced from 30 min)
 const FETCH_TIMEOUT = 15000; // 15 second timeout for slow connections
 let cacheTimestamp = Date.now();
+
+/**
+ * Convert base64 data to a Blob URL to save memory.
+ * A base64 string for a 1024x1024 image is ~3-5MB in JS heap.
+ * A Blob URL is just a ~50 byte string pointer - the binary data 
+ * lives in browser blob storage (outside JS heap).
+ */
+export const base64ToBlobUrl = (base64Data: string, mimeType: string): string => {
+    try {
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Uint8Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const blob = new Blob([byteNumbers], { type: mimeType });
+        return URL.createObjectURL(blob);
+    } catch (e) {
+        console.warn('[base64ToBlobUrl] Failed to convert, returning data URI');
+        return `data:${mimeType};base64,${base64Data}`;
+    }
+};
 
 // Clear cache if too old
 const checkCacheExpiry = () => {
@@ -78,6 +99,22 @@ export const safeGetImageData = async (imageStr: string): Promise<{ data: string
             const mimeType = imageStr.substring(5, imageStr.indexOf(';'));
             const data = imageStr.split('base64,')[1];
             result = { data, mimeType };
+        } else if (imageStr.startsWith('blob:')) {
+            // Handle Blob URLs - fetch the blob and convert to base64 for API use
+            const response = await fetchWithTimeout(imageStr, FETCH_TIMEOUT);
+            const blob = await response.blob();
+            let mimeType = blob.type;
+            if (!mimeType || mimeType === 'application/octet-stream') {
+                mimeType = 'image/png';
+            }
+            result = await new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve({
+                    data: (reader.result as string).split(',')[1],
+                    mimeType
+                });
+                reader.readAsDataURL(blob);
+            });
         } else if (imageStr.startsWith('http')) {
             const startTime = Date.now();
             const response = await fetchWithTimeout(imageStr, FETCH_TIMEOUT);
@@ -215,7 +252,8 @@ export const callGeminiAPI = async (
         const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (imagePart?.inlineData) {
             console.log('[Gemini Gen] ✅ Image generated successfully!');
-            return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+            // Convert to Blob URL to save memory (from ~3MB base64 string to ~50 byte pointer)
+            return base64ToBlobUrl(imagePart.inlineData.data, imagePart.inlineData.mimeType);
         }
 
         console.error('[Gemini Gen] ❌ No image in response:', response);
@@ -374,9 +412,16 @@ export const callCharacterImageAPI = async (
                     }
                 });
 
-                // Convert CDN URL to base64
+                // Convert CDN URL to blob URL for memory efficiency
                 const base64Image = await urlToBase64(cdnUrl);
                 console.log('[CharacterGen] ✅ Gommo image generated successfully');
+                // Convert base64 dataURI to blob URL to save RAM
+                if (base64Image.startsWith('data:')) {
+                    const match = base64Image.match(/^data:([^;]+);base64,(.+)$/);
+                    if (match) {
+                        return base64ToBlobUrl(match[2], match[1]);
+                    }
+                }
                 return base64Image;
             } catch (error: any) {
                 console.error('[CharacterGen] ❌ Gommo error:', error.message);

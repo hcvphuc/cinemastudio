@@ -111,11 +111,11 @@ export function useProductLogic(
 
             if (userId) {
                 const uploadPromises = [
-                    front?.startsWith('data:') ? uploadImageToSupabase(front, 'project-assets', `${userId}/products/${id}_front_${Date.now()}.jpg`) : Promise.resolve(front),
-                    back?.startsWith('data:') ? uploadImageToSupabase(back, 'project-assets', `${userId}/products/${id}_back_${Date.now()}.jpg`) : Promise.resolve(back),
-                    left?.startsWith('data:') ? uploadImageToSupabase(left, 'project-assets', `${userId}/products/${id}_left_${Date.now()}.jpg`) : Promise.resolve(left),
-                    right?.startsWith('data:') ? uploadImageToSupabase(right, 'project-assets', `${userId}/products/${id}_right_${Date.now()}.jpg`) : Promise.resolve(right),
-                    top?.startsWith('data:') ? uploadImageToSupabase(top, 'project-assets', `${userId}/products/${id}_top_${Date.now()}.jpg`) : Promise.resolve(top),
+                    (front?.startsWith('data:') || front?.startsWith('blob:')) ? uploadImageToSupabase(front, 'project-assets', `${userId}/products/${id}_front_${Date.now()}.jpg`) : Promise.resolve(front),
+                    (back?.startsWith('data:') || back?.startsWith('blob:')) ? uploadImageToSupabase(back, 'project-assets', `${userId}/products/${id}_back_${Date.now()}.jpg`) : Promise.resolve(back),
+                    (left?.startsWith('data:') || left?.startsWith('blob:')) ? uploadImageToSupabase(left, 'project-assets', `${userId}/products/${id}_left_${Date.now()}.jpg`) : Promise.resolve(left),
+                    (right?.startsWith('data:') || right?.startsWith('blob:')) ? uploadImageToSupabase(right, 'project-assets', `${userId}/products/${id}_right_${Date.now()}.jpg`) : Promise.resolve(right),
+                    (top?.startsWith('data:') || top?.startsWith('blob:')) ? uploadImageToSupabase(top, 'project-assets', `${userId}/products/${id}_top_${Date.now()}.jpg`) : Promise.resolve(top),
                 ];
                 [front, back, left, right, top] = await Promise.all(uploadPromises);
             }

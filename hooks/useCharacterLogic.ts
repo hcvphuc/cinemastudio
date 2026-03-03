@@ -107,6 +107,18 @@ export function useCharacterLogic(
                         console.error("Cloud upload failed for master image", e);
                     }
                 }
+            } else if (image.startsWith('blob:')) {
+                // Handle Blob URLs (from base64ToBlobUrl memory optimization)
+                const blobRes = await fetch(image);
+                const blob = await blobRes.blob();
+                mimeType = blob.type || 'image/jpeg';
+                data = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                });
+                finalMasterUrl = image;
             } else if (image.startsWith('http')) {
                 // Handle URL images
                 const imgRes = await fetch(image);
@@ -199,6 +211,23 @@ export function useCharacterLogic(
                         console.error("[Lora Gen] Cloud upload failed for master image", e);
                     }
                 }
+            } else if (image.startsWith('blob:')) {
+                // Handle Blob URLs (from base64ToBlobUrl memory optimization)
+                console.log('[Lora Gen] Processing blob URL image...');
+                const blobRes = await fetch(image);
+                const blob = await blobRes.blob();
+                mimeType = blob.type || 'image/jpeg';
+                data = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        const result = (reader.result as string).split(',')[1];
+                        console.log('[Lora Gen] ✅ Blob converted to base64:', result.length, 'chars');
+                        resolve(result);
+                    };
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                });
+                finalMasterUrl = image;
             } else if (image.startsWith('http')) {
                 console.log('[Lora Gen] Fetching URL image...', image);
                 try {

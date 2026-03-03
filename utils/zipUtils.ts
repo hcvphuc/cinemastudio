@@ -29,7 +29,18 @@ const prepareImageForZip = async (source: string): Promise<{ data: string | Blob
             }
         }
 
-        // CASE 2: URL (blob: or http:)
+        // CASE 2: Blob URL (blob:http://...) - created by base64ToBlobUrl for memory optimization
+        if (source.startsWith('blob:')) {
+            const response = await fetch(source);
+            const blob = await response.blob();
+            const mimeType = blob.type || 'image/png';
+            let ext = 'png';
+            if (mimeType.includes('jpeg') || mimeType.includes('jpg')) ext = 'jpg';
+            else if (mimeType.includes('webp')) ext = 'webp';
+            return { data: blob, ext };
+        }
+
+        // CASE 3: URL (http:)
         const response = await fetch(source);
         const blob = await response.blob();
         const mimeType = blob.type;
@@ -40,7 +51,7 @@ const prepareImageForZip = async (source: string): Promise<{ data: string | Blob
         return { data: blob, ext };
 
     } catch (error) {
-        console.warn('Failed to fetch image for ZIP:', source, error);
+        console.warn('Failed to fetch image for ZIP:', source?.substring(0, 80), error);
         return null;
     }
 };
@@ -66,13 +77,14 @@ export const handleDownloadAll = async (state: ProjectState) => {
     docsFolder?.file("script_voiceover.txt", scriptContent);
 
     // 1. SCENE MAP IMAGES
-    const scenePromises = scenes.map(async (scene) => {
+    const scenePromises = scenes.map(async (scene, idx) => {
         if (scene.generatedImage) {
             const img = await prepareImageForZip(scene.generatedImage);
             if (img) {
-                // If it's a string (base64), pass options. If blob, pass directly.
+                // Use index + sceneNumber for unique filenames (sceneNumber may be empty!)
+                const sceneKey = scene.sceneNumber || scene.id || `idx${idx}`;
                 const options = typeof img.data === 'string' ? { base64: true } : {};
-                scenesFolder?.file(`${scene.sceneNumber}.${img.ext}`, img.data, options);
+                scenesFolder?.file(`${String(idx + 1).padStart(3, '0')}_${sceneKey}.${img.ext}`, img.data, options);
                 fileCount++;
             }
         }
@@ -267,11 +279,13 @@ export const saveProjectPackage = async (state: ProjectState) => {
             }
         }
 
-        // 3. Process Scenes
-        for (const s of safeState.scenes) {
-            if (s.generatedImage) s.generatedImage = await processImageField(s.generatedImage, `scene_${s.sceneNumber}_gen`);
-            if (s.referenceImage) s.referenceImage = await processImageField(s.referenceImage, `scene_${s.sceneNumber}_ref`);
-            if (s.endFrameImage) s.endFrameImage = await processImageField(s.endFrameImage, `scene_${s.sceneNumber}_end`);
+        // 3. Process Scenes — use index + id for unique filenames (sceneNumber may be empty/duplicate!)
+        for (let i = 0; i < safeState.scenes.length; i++) {
+            const s = safeState.scenes[i];
+            const sceneKey = s.sceneNumber || s.id || `idx${i}`;
+            if (s.generatedImage) s.generatedImage = await processImageField(s.generatedImage, `scene_${String(i).padStart(3, '0')}_${sceneKey}_gen`);
+            if (s.referenceImage) s.referenceImage = await processImageField(s.referenceImage, `scene_${String(i).padStart(3, '0')}_${sceneKey}_ref`);
+            if (s.endFrameImage) s.endFrameImage = await processImageField(s.endFrameImage, `scene_${String(i).padStart(3, '0')}_${sceneKey}_end`);
         }
 
         // 4. Process Gallery
@@ -329,14 +343,15 @@ export const loadProjectPackage = async (file: File): Promise<ProjectState> => {
     const jsonStr = await jsonFile.async("string");
     const state = JSON.parse(jsonStr) as ProjectState;
 
-    // Helper: Restore image from zip path
+    // Helper: Restore image from zip path — returns Blob URL (memory efficient)
     const restoreImage = async (path: string | null | undefined): Promise<string | null> => {
         if (!path || !path.startsWith('assets/')) return path || null;
 
         const imgFile = zip.file(path);
         if (imgFile) {
             const blob = await imgFile.async("blob");
-            return await blobToBase64(blob);
+            // Return Blob URL instead of base64 to save memory
+            return URL.createObjectURL(blob);
         }
         return null;
     };
@@ -378,6 +393,12 @@ export const loadProjectPackage = async (file: File): Promise<ProjectState> => {
             s.generatedImage = await restoreImage(s.generatedImage);
             s.referenceImage = await restoreImage(s.referenceImage);
             s.endFrameImage = await restoreImage(s.endFrameImage);
+
+            // Auto-fill voiceover from existing text if not present (migration for old projects)
+            if (!s.voiceover && (s.voiceOverText || s.language1 || s.vietnamese || s.contextDescription)) {
+                s.voiceover = s.voiceOverText || s.language1 || s.vietnamese || s.contextDescription || '';
+                console.log(`[ZIP Migration] Scene ${s.sceneNumber || s.id}: auto-filled voiceover`);
+            }
         }
     }
 

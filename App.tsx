@@ -69,6 +69,7 @@ import { useProductionLogger } from './hooks/useProductionLogger';
 import { useGallery } from './hooks/useGallery';
 import { useEditorLogic } from './hooks/useEditorLogic';
 import { useStyleAnalysis } from './hooks/useStyleAnalysis';
+import { usePostImportGeneration } from './hooks/usePostImportGeneration';
 
 import { supabase } from './utils/supabaseClient';
 
@@ -80,6 +81,7 @@ const App: React.FC = () => {
     const {
         state,
         updateStateAndRecord,
+        updateStateWithoutHistory,
         undo,
         redo,
         handleSave,
@@ -197,6 +199,13 @@ const App: React.FC = () => {
         classifyErrors,
         makeRetryDecision
     } = useDOPLogic(state);
+
+    // Post-Import Auto Generation
+    const {
+        progress: postImportProgress,
+        startPostImportGeneration,
+        cancelGeneration: cancelPostImportGeneration,
+    } = usePostImportGeneration(state, updateStateWithoutHistory, userApiKey, setAgentState);
 
     const {
         performImageGeneration,
@@ -786,8 +795,6 @@ const App: React.FC = () => {
                     <div className="w-12 h-12 border-4 border-brand-orange border-t-transparent rounded-full animate-spin mb-4"></div>
                     <p className="text-brand-cream/60 animate-pulse text-xs font-bold tracking-widest uppercase">Khởi tạo ứng dụng...</p>
                 </div>
-            ) : session && !isPro && !isAdmin ? (
-                <ActivationScreen email={session.user.email} onSignOut={handleSignOut} />
             ) : (
                 <>
                     {/* Cloud Operation Overlay */}
@@ -1171,7 +1178,7 @@ const App: React.FC = () => {
                         onEdit={(id, img, view) => openEditor(id, img, 'product', undefined, view)}
                     />
 
-                    {!session && <AuthModal isOpen={true} />}
+
 
                     {/* Gommo Library Modal */}
                     <GommoLibraryModal
@@ -1323,17 +1330,64 @@ const App: React.FC = () => {
                     <ExcelImportModal
                         isOpen={isExcelImportModalOpen}
                         onClose={() => setExcelImportModalOpen(false)}
-                        onImport={(result, directorId) => {
-                            // Merge imported data into state
+                        onImport={(result, directorId, autoGenerate) => {
+                            // Merge imported data into state (including products)
                             updateStateAndRecord(s => ({
                                 ...s,
                                 sceneGroups: [...(s.sceneGroups || []), ...result.groups],
                                 scenes: [...s.scenes, ...result.scenes],
                                 characters: [...s.characters, ...result.characters],
+                                products: [...(s.products || []), ...(result.products || [])],
                                 activeDirectorId: directorId || s.activeDirectorId
                             }));
+
+                            // Trigger auto-generation if enabled
+                            if (autoGenerate) {
+                                const charIds = result.characters.map(c => c.id);
+                                const prodIds = (result.products || []).map(p => p.id);
+                                // Small delay to let state update propagate
+                                setTimeout(() => {
+                                    startPostImportGeneration(charIds, prodIds);
+                                }, 500);
+                            }
                         }}
                     />
+
+                    {/* Post-Import Generation Progress Indicator */}
+                    {postImportProgress.isGenerating && (
+                        <div className="fixed bottom-6 right-6 z-50 bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl p-4 w-80">
+                            <div className="flex items-center justify-between mb-3">
+                                <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                                    <span className="animate-spin inline-block w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full" />
+                                    Auto-Generating Assets
+                                </h4>
+                                <button
+                                    onClick={cancelPostImportGeneration}
+                                    className="text-xs text-zinc-500 hover:text-red-400 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                            <div className="text-xs text-zinc-400 mb-2">{postImportProgress.currentName}</div>
+                            <div className="w-full bg-zinc-800 rounded-full h-2 mb-2">
+                                <div
+                                    className="bg-gradient-to-r from-emerald-500 to-teal-400 h-2 rounded-full transition-all duration-500"
+                                    style={{ width: `${postImportProgress.total > 0 ? (postImportProgress.current / postImportProgress.total) * 100 : 0}%` }}
+                                />
+                            </div>
+                            <div className="flex justify-between text-xs text-zinc-500">
+                                <span>{postImportProgress.current}/{postImportProgress.total} tasks</span>
+                                <span className="capitalize">{postImportProgress.currentPhase}</span>
+                            </div>
+                            {postImportProgress.errors.length > 0 && (
+                                <div className="mt-2 text-xs text-red-400 max-h-16 overflow-y-auto">
+                                    {postImportProgress.errors.slice(-3).map((err, i) => (
+                                        <div key={i}>⚠️ {err}</div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                     <input
                         id="script-upload-input"
                         type="file"

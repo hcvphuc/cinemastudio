@@ -12,7 +12,7 @@
 export async function splitImageGrid(gridBase64: string): Promise<string[]> {
     return new Promise((resolve, reject) => {
         const img = new Image();
-        img.onload = () => {
+        img.onload = async () => {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             if (!ctx) {
@@ -35,11 +35,15 @@ export async function splitImageGrid(gridBase64: string): Promise<string[]> {
                 { x: width, y: height }
             ];
 
-            quadrants.forEach(q => {
+            for (const q of quadrants) {
                 ctx.clearRect(0, 0, width, height);
                 ctx.drawImage(img, q.x, q.y, width, height, 0, 0, width, height);
-                results.push(canvas.toDataURL('image/jpeg', 0.9));
-            });
+                // Use toBlob + createObjectURL instead of toDataURL to save memory
+                const blob = await new Promise<Blob>((res, rej) => {
+                    canvas.toBlob(b => b ? res(b) : rej(new Error('toBlob failed')), 'image/jpeg', 0.9);
+                });
+                results.push(URL.createObjectURL(blob));
+            }
 
             resolve(results);
         };

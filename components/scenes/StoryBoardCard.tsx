@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { Trash2, Brush, GripVertical, Download, Pencil, Layers, X, Eye, Sparkles } from 'lucide-react';
+import { Trash2, GripVertical, Download, Pencil, Layers, X, Eye } from 'lucide-react';
 import { SceneRowProps } from './SceneRow';
-import { ExpandableTextarea } from '../common/ExpandableTextarea';
 
 // Preset angles for Insert Angles feature (same as SceneRow)
 const INSERT_ANGLE_OPTIONS = [
@@ -161,8 +160,8 @@ export const StoryBoardCard: React.FC<StoryBoardCardProps> = ({
                 <button
                     onClick={(e) => { e.stopPropagation(); updateScene(scene.id, { isKeyFrame: !scene.isKeyFrame }); }}
                     className={`absolute top-2 right-2 px-2 py-1 rounded-full text-[9px] font-bold uppercase tracking-wide transition-all ${scene.isKeyFrame
-                            ? 'bg-yellow-500 text-black shadow-lg shadow-yellow-500/30'
-                            : 'bg-black/50 text-gray-400 opacity-0 group-hover/card:opacity-100 hover:bg-yellow-500/20 hover:text-yellow-400'
+                        ? 'bg-yellow-500 text-black shadow-lg shadow-yellow-500/30'
+                        : 'bg-black/50 text-gray-400 opacity-0 group-hover/card:opacity-100 hover:bg-yellow-500/20 hover:text-yellow-400'
                         }`}
                     title={scene.isKeyFrame ? 'Remove Key Frame (scenes will use previous anchor)' : 'Mark as Key Frame (hero shot for nearby scenes)'}
                 >
@@ -172,39 +171,16 @@ export const StoryBoardCard: React.FC<StoryBoardCardProps> = ({
 
             {/* Content Section */}
             <div className="p-3 flex-1 flex flex-col space-y-2">
-                {(scene.voiceOverText || scene.isVOScene) && (
-                    <div className="relative group/vo">
-                        <ExpandableTextarea
-                            value={scene.voiceOverText || ''}
-                            onChange={(val) => updateScene(scene.id, { voiceOverText: val })}
-                            placeholder="Voice Over..."
-                            rows={3}
-                            className="w-full bg-violet-900/10 border-b border-violet-500/20 p-1 mb-1 text-xs text-violet-200 focus:ring-0 resize-none overflow-hidden scrollbar-none italic leading-relaxed font-medium pr-6"
-                        />
-                        {/* Expand Sequence Button */}
-                        {onExpandScene && (scene.voiceOverText && scene.voiceOverText.length > 30) && (
-                            <button
-                                onClick={() => onExpandScene(scene.id)}
-                                disabled={isExpandingSequence}
-                                className="absolute right-0 top-0 p-1 text-violet-400 hover:text-white hover:bg-violet-500/50 rounded transition-all opacity-0 group-hover/vo:opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="✨ Expand Sequence"
-                            >
-                                {isExpandingSequence ? (
-                                    <div className="w-2.5 h-2.5 border-2 border-violet-300 border-t-transparent rounded-full animate-spin" />
-                                ) : (
-                                    <Sparkles size={10} />
-                                )}
-                            </button>
-                        )}
-                    </div>
-                )}
-                <ExpandableTextarea
-                    value={scene.language1 || scene.vietnamese || ''}
-                    onChange={(val) => updateScene(scene.id, { language1: val })}
-                    placeholder="Nội dung kịch bản..."
-                    rows={3}
-                    className="w-full bg-transparent border-none p-0 text-xs text-gray-300 focus:ring-0 resize-none overflow-hidden scrollbar-none italic leading-relaxed"
-                />
+                {/* Voiceover Display */}
+                <div className="flex-1 overflow-y-auto max-h-40 scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
+                    <p
+                        className="text-[11px] text-gray-300 italic leading-relaxed"
+                        title={scene.voiceover || scene.voiceOverText || scene.language1 || scene.vietnamese || scene.contextDescription || ''}
+                    >
+                        <span className="text-violet-400 not-italic mr-1">🎙️</span>
+                        {scene.voiceover || scene.voiceOverText || scene.language1 || scene.vietnamese || scene.contextDescription || '(Chưa có voiceover)'}
+                    </p>
+                </div>
 
                 <div className="mt-auto pt-2 flex justify-between items-center border-t border-gray-700/50">
                     <div className="flex items-center space-x-2">

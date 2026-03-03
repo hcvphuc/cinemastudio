@@ -11,19 +11,29 @@ export { supabase };
  * @returns The public URL of the uploaded image
  */
 export async function uploadImageToSupabase(
-    base64Data: string,
+    imageData: string,
     bucket: string = 'project-assets',
     path: string = `assets/${Date.now()}.jpg`
 ): Promise<string> {
     try {
-        // Remove prefix (e.g., "data:image/jpeg;base64,")
-        const base64Body = base64Data.split(',')[1];
+        let binaryData: Uint8Array;
+        let contentType: string = 'image/jpeg';
 
-        // Convert base64 to Uint8Array/Blob
-        const binaryData = Uint8Array.from(atob(base64Body), c => c.charCodeAt(0));
-
-        // Determine content type from base64 prefix
-        const contentType = base64Data.match(/:(.*?);/)?.[1] || 'image/jpeg';
+        if (imageData.startsWith('blob:')) {
+            // Handle Blob URLs (from base64ToBlobUrl memory optimization)
+            const response = await fetch(imageData);
+            const blob = await response.blob();
+            contentType = blob.type || 'image/jpeg';
+            const arrayBuffer = await blob.arrayBuffer();
+            binaryData = new Uint8Array(arrayBuffer);
+        } else if (imageData.startsWith('data:')) {
+            // Handle data: URIs (legacy path)
+            const base64Body = imageData.split(',')[1];
+            binaryData = Uint8Array.from(atob(base64Body), c => c.charCodeAt(0));
+            contentType = imageData.match(/:(.*?);/)?.[1] || 'image/jpeg';
+        } else {
+            throw new Error('Unsupported image format for upload');
+        }
 
         const { data, error } = await supabase.storage
             .from(bucket)
@@ -62,7 +72,7 @@ export async function processProjectAssets(state: any, userId: string): Promise<
         for (const char of newState.characters) {
             const fields = ['masterImage', 'faceImage', 'bodyImage', 'sideImage', 'backImage', 'generatedImage'];
             for (const field of fields) {
-                if (char[field]?.startsWith('data:')) {
+                if (char[field]?.startsWith('data:') || char[field]?.startsWith('blob:')) {
                     console.log(`[Storage] Uploading character ${field}: ${char.id}`);
                     char[field] = await uploadImageToSupabase(
                         char[field],
@@ -74,7 +84,7 @@ export async function processProjectAssets(state: any, userId: string): Promise<
             }
             if (char.props) {
                 for (const prop of char.props) {
-                    if (prop.image?.startsWith('data:')) {
+                    if (prop.image?.startsWith('data:') || prop.image?.startsWith('blob:')) {
                         console.log(`[Storage] Uploading character prop: ${prop.id}`);
                         prop.image = await uploadImageToSupabase(
                             prop.image,
@@ -91,7 +101,7 @@ export async function processProjectAssets(state: any, userId: string): Promise<
     // 3. Process Products
     if (newState.products) {
         for (const prod of newState.products) {
-            if (prod.masterImage?.startsWith('data:')) {
+            if (prod.masterImage?.startsWith('data:') || prod.masterImage?.startsWith('blob:')) {
                 console.log(`[Storage] Uploading product master: ${prod.id}`);
                 prod.masterImage = await uploadImageToSupabase(
                     prod.masterImage,
@@ -103,7 +113,7 @@ export async function processProjectAssets(state: any, userId: string): Promise<
             if (prod.views) {
                 const views = ['front', 'back', 'left', 'right', 'top'];
                 for (const view of views) {
-                    if (prod.views[view]?.startsWith('data:')) {
+                    if (prod.views[view]?.startsWith('data:') || prod.views[view]?.startsWith('blob:')) {
                         console.log(`[Storage] Uploading product view ${view}: ${prod.id}`);
                         prod.views[view] = await uploadImageToSupabase(
                             prod.views[view],

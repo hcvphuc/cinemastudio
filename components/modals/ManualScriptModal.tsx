@@ -15,6 +15,7 @@ import { useScriptAnalysis, ScriptAnalysisResult } from '../../hooks/useScriptAn
 import { useResearchPresets, ResearchPreset } from '../../hooks/useResearchPresets';
 import { GoogleGenAI } from "@google/genai";
 import { generateId } from '../../utils/helpers';
+import { formatForElevenLabs, getElevenLabsFilename } from '../../utils/elevenLabsFormatter';
 
 interface ManualScriptModalProps {
     isOpen: boolean;
@@ -57,6 +58,99 @@ interface ManualScriptModalProps {
     }) => void;
 }
 
+/**
+ * Pre-process a Markdown (.md) script file:
+ * - Strip metadata block (title, production info before ---)
+ * - Convert PART headers → [bracket] chapter notation for chapter detection
+ * - Convert **[CLIFFHANGER: ...]** → narrator transition markers
+ * - Convert [CTA]: → voiceover content  
+ * - Strip bold markdown formatting ** **
+ * - Remove remaining markdown headers (##, ###)
+ * - Preserve voiceover content and inline dialogue as-is
+ */
+function preprocessMarkdownScript(raw: string): string {
+    const lines = raw.split('\n');
+    const result: string[] = [];
+    let pastMetadata = false;
+    let hasMetadataBlock = false;
+
+    // Check if file starts with metadata (# Title or ### Production)
+    for (const line of lines.slice(0, 10)) {
+        const t = line.trim();
+        if (t.startsWith('# ') || t.startsWith('### Production') || t.match(/^\*\*\w+\*\*\s*:/)) {
+            hasMetadataBlock = true;
+            break;
+        }
+    }
+
+    // If no metadata block detected, start processing immediately
+    if (!hasMetadataBlock) pastMetadata = true;
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+
+        // Skip metadata block (# Title, ### Production Info, **Key**: Value, ---)
+        if (!pastMetadata) {
+            if (trimmed === '---') { pastMetadata = true; continue; }
+            if (trimmed.startsWith('#') || trimmed.startsWith('**') || !trimmed) continue;
+            // If we reach a non-metadata line without finding ---, start processing
+            pastMetadata = true;
+        }
+
+        // Convert PART headers → [bracket] chapter notation (ONLY these become chapters)
+        // Matches: "## PART A: HOOK — The Table Flip", "PART B: THE BACKSTORY", "# PART 1: Setup"
+        const partMatch = trimmed.match(/^#{0,3}\s*PART\s+([A-Z0-9]+)[\s:—\-–]+(.+)$/i);
+        if (partMatch) {
+            result.push(`[PART ${partMatch[1].toUpperCase()}: ${partMatch[2].trim()}]`);
+            continue;
+        }
+
+        // Strip ALL bracket-formatted script annotations to prevent them from becoming chapter markers
+        // These are YouTube script conventions: [CLIFFHANGER: ...], [CTA], [MICRO-CTA], [FLASHBACK ...], [PUNCHLINE ...], etc.
+        // Convert to plain narrator text (extract the content after the keyword)
+        const bracketAnnotation = trimmed.match(/^\*{0,2}\[(CLIFFHANGER|CTA|MICRO-CTA|FLASHBACK[^:]*|PUNCHLINE[^:]*|FINAL CTA|FINAL STATISTICS)[:\s—\-–]*(.*)?\]\*{0,2}[:\s]*(.*)$/i);
+        if (bracketAnnotation) {
+            // Combine inner text + any text after the bracket
+            const innerText = (bracketAnnotation[2] || '').trim();
+            const afterText = (bracketAnnotation[3] || '').trim();
+            const combined = [innerText, afterText].filter(Boolean).join(' ');
+            if (combined) {
+                // Strip any remaining ** bold formatting
+                result.push(combined.replace(/\*\*/g, ''));
+            }
+            continue;
+        }
+
+        // Also catch standalone bracket tags like **[PUNCHLINE MID — DELIVERED]** or **[FLASHBACK 1 — BEGINS]**
+        // These have no text content to extract, just skip them
+        const standaloneTag = trimmed.match(/^\*{0,2}\[.+?(BEGINS|ENDS|DELIVERED|PAYOFF|EPILOGUE)[^]]*\]\*{0,2}$/i);
+        if (standaloneTag) {
+            continue; // Skip structural tags
+        }
+
+        // Skip remaining markdown headers that aren't PART headers
+        if (/^#{1,3}\s/.test(trimmed)) continue;
+
+        // Skip horizontal rules
+        if (/^---+$/.test(trimmed)) continue;
+
+        // Strip bold markdown formatting: **text** → text
+        let processed = line.replace(/\*\*(.+?)\*\*/g, '$1');
+
+        // Strip any remaining [BRACKET TAGS] that weren't caught above (safety net)
+        // But preserve [PART ...] brackets
+        processed = processed.replace(/\*{0,2}\[(?!PART\s)([^\]]+)\]\*{0,2}/g, (match, content) => {
+            // Return just the content without brackets
+            return content;
+        });
+
+        // Keep everything else as voiceover content (including inline dialogue in quotes)
+        result.push(processed);
+    }
+
+    return result.join('\n').trim();
+}
+
 export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
     isOpen,
     onClose,
@@ -79,7 +173,7 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
     // UI state
     const [showStylePicker, setShowStylePicker] = useState(false);
     const [showDirectorPicker, setShowDirectorPicker] = useState(false);
-    const [sceneCountAdjustment, setSceneCountAdjustment] = useState(0);
+    const [sceneCountEstimate, setSceneCountEstimate] = useState<number | null>(null); // User-adjustable scene count
 
     // Research Notes state
     const [showResearchNotes, setShowResearchNotes] = useState(false);
@@ -116,6 +210,42 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
         userWentBack.current = true;
         setAnalysisResult(null);
     }, [setAnalysisResult]);
+
+    // Handler for importing .md/.txt script file
+    const handleImportMdFile = useCallback(() => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.md,.txt,.markdown';
+        input.onchange = (e) => {
+            const file = (e.target as HTMLInputElement).files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const raw = ev.target?.result as string;
+                const processed = preprocessMarkdownScript(raw);
+                setScriptText(processed);
+                console.log(`[ManualScript] Imported .md file: ${file.name} (${raw.length} → ${processed.length} chars)`);
+            };
+            reader.readAsText(file);
+        };
+        input.click();
+    }, []);
+
+    // Handler for exporting ElevenLabs-ready voiceover text
+    const handleExportElevenLabsVO = useCallback(() => {
+        if (!scriptText.trim()) return;
+        const formatted = formatForElevenLabs(scriptText);
+        const blob = new Blob([formatted], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = getElevenLabsFilename();
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        console.log(`[ManualScript] Exported ElevenLabs VO (${formatted.length} chars)`);
+    }, [scriptText]);
 
     // [NEW] Notify parent of state changes for persistence
     React.useEffect(() => {
@@ -165,9 +295,10 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                 dop: dopNotes || undefined,
                 story: storyContext || undefined // [New]
             } : null,
-            existingCharacters // [Fixed] Check against existing characters
+            existingCharacters, // [Fixed] Check against existing characters
+            sceneCountEstimate || undefined // Pass user's estimated scene count
         );
-    }, [scriptText, readingSpeed, selectedModel, analyzeScript, selectedStyle, selectedDirector, directorNotes, dopNotes, storyContext]);
+    }, [scriptText, readingSpeed, selectedModel, analyzeScript, selectedStyle, selectedDirector, directorNotes, dopNotes, storyContext, sceneCountEstimate]);
 
     // Handle import
     const handleImport = useCallback(() => {
@@ -332,6 +463,25 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                                     <label className="text-sm font-semibold text-white uppercase tracking-wider">
                                         Voice-Over Script
                                     </label>
+                                    <div className="ml-auto flex items-center gap-2">
+                                        <button
+                                            onClick={handleImportMdFile}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600/20 border border-violet-500/30 text-violet-300 rounded-lg text-xs font-medium hover:bg-violet-600/40 hover:border-violet-500/50 transition-all"
+                                            title="Import from .md or .txt file"
+                                        >
+                                            <Upload size={12} />
+                                            Import .md
+                                        </button>
+                                        {scriptText.trim() && (
+                                            <button
+                                                onClick={handleExportElevenLabsVO}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 rounded-lg text-xs font-medium hover:bg-emerald-600/40 hover:border-emerald-500/50 transition-all"
+                                                title="Export voiceover text optimized for ElevenLabs TTS"
+                                            >
+                                                📥 Export VO
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
                                 <div className="relative flex-1">
                                     <textarea
@@ -578,6 +728,42 @@ John enters the room, wearing a tailored Armani suit..."
                                     </div>
                                 </div>
 
+                                {/* Scene Count Estimate */}
+                                <div className="bg-zinc-800/30 rounded-2xl p-4 border border-zinc-700/30 backdrop-blur-sm">
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <Layers className="w-4 h-4 text-emerald-400" />
+                                        <span className="text-sm font-bold text-white uppercase tracking-wider">Estimated Scenes</span>
+                                    </div>
+                                    <p className="text-xs text-zinc-500 mb-3">Số phân cảnh ước lượng. AI sẽ dùng con số này làm mục tiêu.</p>
+                                    <div className="flex items-center gap-3">
+                                        <button
+                                            onClick={() => setSceneCountEstimate(Math.max(5, (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)) - 5))}
+                                            className="w-8 h-8 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-emerald-500/50 text-white font-bold flex items-center justify-center transition-colors"
+                                        >
+                                            −
+                                        </button>
+                                        <div className="flex-1">
+                                            <input
+                                                type="number"
+                                                min={5}
+                                                max={500}
+                                                value={sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)}
+                                                onChange={(e) => setSceneCountEstimate(Math.max(5, Math.min(500, parseInt(e.target.value) || 10)))}
+                                                className="w-full bg-zinc-900/80 border border-zinc-700 rounded-xl px-4 py-2.5 text-center text-lg font-bold text-emerald-400 focus:outline-none focus:border-emerald-500 transition-colors"
+                                            />
+                                        </div>
+                                        <button
+                                            onClick={() => setSceneCountEstimate(Math.min(500, (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)) + 5))}
+                                            className="w-8 h-8 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-emerald-500/50 text-white font-bold flex items-center justify-center transition-colors"
+                                        >
+                                            +
+                                        </button>
+                                    </div>
+                                    <div className="mt-2 text-xs text-zinc-500 text-center">
+                                        ~{Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)))} words/scene
+                                    </div>
+                                </div>
+
                                 {/* Character Style Card - Compact */}
                                 <div className="bg-zinc-800/30 rounded-2xl p-4 border border-zinc-700/30 backdrop-blur-sm">
                                     <div className="flex items-center justify-between mb-3">
@@ -771,8 +957,12 @@ John enters the room, wearing a tailored Armani suit..."
                                     <div className="text-sm text-zinc-400">Chapters</div>
                                 </div>
                                 <div className="bg-zinc-800/50 rounded-xl p-4">
-                                    <div className="text-2xl font-bold text-emerald-400">{analysisResult.suggestedSceneCount}</div>
-                                    <div className="text-sm text-zinc-400">Scenes</div>
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <div className="text-2xl font-bold text-emerald-400">{analysisResult.suggestedSceneCount}</div>
+                                            <div className="text-sm text-zinc-400">Scenes</div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 

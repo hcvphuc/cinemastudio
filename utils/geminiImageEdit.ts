@@ -80,8 +80,22 @@ const withRetry = async <T>(
     throw lastError;
 };
 
-// Helper function to convert URL to base64
+// Helper function to convert URL (including blob: URLs) to base64
 const urlToBase64 = async (url: string): Promise<{ data: string; mimeType: string }> => {
+    // Handle blob: URLs (from base64ToBlobUrl memory optimization)
+    if (url.startsWith('blob:')) {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const mimeType = blob.type || 'image/jpeg';
+        const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+        return { data: base64, mimeType };
+    }
+
     const response = await fetch(url);
     if (!response.ok) throw new Error('Failed to fetch image from URL');
     const blob = await response.blob();

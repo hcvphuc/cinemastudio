@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useCallback, useRef } from 'react';
-import { X, Upload, FileSpreadsheet, Check, AlertCircle, ChevronDown, Loader2, Film } from 'lucide-react';
+import { X, Upload, FileSpreadsheet, Check, AlertCircle, ChevronDown, Loader2, Film, Sparkles, Package } from 'lucide-react';
 import { useExcelImport, ColumnMapping, ExcelImportResult } from '../../hooks/useExcelImport';
 import { Scene, SceneGroup, Character } from '../../types';
 import { DirectorPreset, DIRECTOR_PRESETS } from '../../constants/directors';
@@ -14,7 +14,7 @@ import { DirectorPreset, DIRECTOR_PRESETS } from '../../constants/directors';
 interface ExcelImportModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onImport: (result: ExcelImportResult, directorId?: string) => void;
+    onImport: (result: ExcelImportResult, directorId?: string, autoGenerate?: boolean) => void;
 }
 
 export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
@@ -31,6 +31,9 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
     // Director selection
     const [selectedDirectorId, setSelectedDirectorId] = useState<string>('werner_herzog');
     const [showDirectorPicker, setShowDirectorPicker] = useState(false);
+
+    // Auto-generate toggle
+    const [autoGenerate, setAutoGenerate] = useState(false);
 
     const {
         isProcessing,
@@ -65,10 +68,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
 
         const result = await importFile(selectedFile, mapping);
         if (result) {
-            onImport(result, selectedDirectorId);
+            onImport(result, selectedDirectorId, autoGenerate);
             onClose();
         }
-    }, [selectedFile, mapping, importFile, onImport, onClose, selectedDirectorId]);
+    }, [selectedFile, mapping, importFile, onImport, onClose, selectedDirectorId, autoGenerate]);
 
     const updateMapping = (field: keyof ColumnMapping, value: string) => {
         if (!mapping) return;
@@ -161,8 +164,8 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                                                     setShowDirectorPicker(false);
                                                 }}
                                                 className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${d.id === selectedDirectorId
-                                                        ? 'bg-amber-500/20 text-amber-300'
-                                                        : 'hover:bg-zinc-700 text-zinc-300'
+                                                    ? 'bg-amber-500/20 text-amber-300'
+                                                    : 'hover:bg-zinc-700 text-zinc-300'
                                                     }`}
                                             >
                                                 {d.name}
@@ -255,7 +258,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                     {selectedFile && rowCount > 0 && (
                         <div className="bg-zinc-800/50 rounded-xl p-4">
                             <h3 className="text-sm font-medium text-white mb-2">Import Summary</h3>
-                            <div className="grid grid-cols-3 gap-4 text-center">
+                            <div className="grid grid-cols-4 gap-4 text-center">
                                 <div>
                                     <div className="text-2xl font-bold text-emerald-400">{rowCount}</div>
                                     <div className="text-xs text-zinc-500">Scenes</div>
@@ -272,7 +275,42 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                                     </div>
                                     <div className="text-xs text-zinc-500">Characters</div>
                                 </div>
+                                <div>
+                                    <div className="text-2xl font-bold text-orange-400">
+                                        <Package className="w-5 h-5 inline" />
+                                    </div>
+                                    <div className="text-xs text-zinc-500">Props (auto)</div>
+                                </div>
                             </div>
+                        </div>
+                    )}
+
+                    {/* Auto-Generate Toggle */}
+                    {selectedFile && rowCount > 0 && (
+                        <div className="bg-zinc-800/50 rounded-xl p-4 border border-zinc-700">
+                            <label className="flex items-start gap-3 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={autoGenerate}
+                                    onChange={(e) => setAutoGenerate(e.target.checked)}
+                                    className="mt-1 w-4 h-4 rounded border-zinc-600 bg-zinc-700 text-emerald-500 focus:ring-emerald-500"
+                                />
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-2 text-white font-medium">
+                                        <Sparkles className="w-4 h-4 text-amber-400" />
+                                        Auto-generate Character & Props Images
+                                    </div>
+                                    <p className="text-xs text-zinc-400 mt-1">
+                                        Tự động tạo hình nhân vật (Master Image → Face ID + Body) và đạo cụ/vũ khí sau khi import.
+                                        Sẽ sử dụng API credits.
+                                    </p>
+                                    {autoGenerate && (
+                                        <div className="mt-2 text-xs text-amber-400/80 bg-amber-500/10 rounded-lg px-3 py-2">
+                                            ⚡ Ước tính: ~{(previewData ? new Set(previewData.flatMap(r => String(r[mapping?.characterNames || '']).split(',').map(n => n.trim())).filter(Boolean)).size : 0) * 2} API calls cho nhân vật + props. Thời gian: ~3-5 phút.
+                                        </div>
+                                    )}
+                                </div>
+                            </label>
                         </div>
                     )}
                 </div>

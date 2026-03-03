@@ -185,7 +185,8 @@ export function useScriptAnalysis(userApiKey: string | null) {
         characterStyle?: CharacterStyleDefinition | null,
         director?: DirectorPreset | null,
         researchNotes?: { director?: string; dop?: string; story?: string } | null,
-        activeCharacters: { id: string; name: string; description?: string }[] = [] // New Param for auto-assignment
+        activeCharacters: { id: string; name: string; description?: string }[] = [], // New Param for auto-assignment
+        sceneCountEstimate?: number // User's desired scene count (optional)
     ): Promise<ScriptAnalysisResult | null> => {
         if (!userApiKey) {
             setAnalysisError('API key required');
@@ -233,8 +234,11 @@ export function useScriptAnalysis(userApiKey: string | null) {
             // FALLBACK: Other patterns for non-bracketed scripts
             const chapterPatterns = [
                 // PRIORITY: Bracket format [Chapter Title] - MOST RELIABLE
-                // Matches: [Marseille, November 2019], [The Mask], [Casino de Monte-Carlo, May 2019]
+                // Matches: [Marseille, November 2019], [The Mask], [PART A: HOOK — The Table Flip]
                 /^\[(.+)\]$/,
+
+                // PART headers (non-bracketed): "PART A: HOOK", "PART 1: Setup"
+                /^PART\s+[A-Z0-9]+[\s:—\-–]+.+$/i,
 
                 // Pattern 1: "Place, Month Year" (e.g., "Marseille, November 2019", "Casino de Monte-Carlo, May 2019")
                 /^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-']+),?\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s*(\d{4}s?)$/i,
@@ -276,44 +280,53 @@ export function useScriptAnalysis(userApiKey: string | null) {
                     console.log(`[Chapter Detection] 📍 Found chapter (bracket): "${headerText}" → ${chapterId}`);
                     return; // Skip other patterns for this line
                 }
-
-                // FALLBACK: Non-bracketed patterns
-                // Skip empty lines, lines > 50 chars, or lines that look like sentences
-                if (!trimmedLine || trimmedLine.length > 50 || /[.!?]\s+[A-Z]/.test(trimmedLine)) return;
-
-                // Also skip lines that are clearly not headers (too many words = likely a sentence)
-                const wordCount = trimmedLine.split(/\s+/).length;
-                if (wordCount > 6) return;
-
-                for (const pattern of chapterPatterns) {
-                    if (pattern.test(trimmedLine)) {
-                        // Generate chapter ID from header
-                        const chapterId = trimmedLine
-                            .toLowerCase()
-                            .replace(/[^a-z0-9\s]/g, '')
-                            .replace(/\s+/g, '_')
-                            .substring(0, 30);
-
-                        chapterMarkers.push({
-                            lineNumber: index + 1,
-                            header: trimmedLine,
-                            chapterId: chapterId
-                        });
-                        console.log(`[Chapter Detection] 📍 Found chapter: "${trimmedLine}" → ${chapterId}`);
-                        break;
-                    }
-                }
             });
+
+            // IMPORTANT: Only use fallback patterns if NO bracket chapters were found
+            // When bracket chapters exist (e.g. [PART A: ...]), they are the SOLE chapter boundaries
+            const hasBracketChapters = chapterMarkers.length > 0;
+
+            if (!hasBracketChapters) {
+                lines.forEach((line, index) => {
+                    const trimmedLine = line.trim();
+                    // Skip empty lines, lines > 50 chars, or lines that look like sentences
+                    if (!trimmedLine || trimmedLine.length > 50 || /[.!?]\s+[A-Z]/.test(trimmedLine)) return;
+
+                    // Also skip lines that are clearly not headers (too many words = likely a sentence)
+                    const wordCount = trimmedLine.split(/\s+/).length;
+                    if (wordCount > 6) return;
+
+                    for (const pattern of chapterPatterns) {
+                        if (pattern.test(trimmedLine)) {
+                            const chapterId = trimmedLine
+                                .toLowerCase()
+                                .replace(/[^a-z0-9\s]/g, '')
+                                .replace(/\s+/g, '_')
+                                .substring(0, 30);
+
+                            chapterMarkers.push({
+                                lineNumber: index + 1,
+                                header: trimmedLine,
+                                chapterId: chapterId
+                            });
+                            console.log(`[Chapter Detection] 📍 Found chapter (fallback): "${trimmedLine}" → ${chapterId}`);
+                            break;
+                        }
+                    }
+                });
+            } else {
+                console.log(`[Chapter Detection] ✅ Using ${chapterMarkers.length} bracket chapters exclusively (fallback patterns DISABLED)`);
+            }
 
             // Build chapter hints for AI
             const chapterHintsForAI = chapterMarkers.length > 0
-                ? `\n[PRE-DETECTED CHAPTER BOUNDARIES - STRICTLY FOLLOW THESE]:\n${chapterMarkers.map((ch, i) => {
+                ? `\n[PRE-DETECTED CHAPTER BOUNDARIES — HARD LOCKED, DO NOT MODIFY]:\n${chapterMarkers.map((ch, i) => {
                     const nextChapter = chapterMarkers[i + 1];
                     const endNote = nextChapter
-                        ? `(ALL scenes until line ${nextChapter.lineNumber - 1} belong here)`
-                        : `(ALL remaining scenes belong here)`;
+                        ? `(ALL scenes from line ${ch.lineNumber} to line ${nextChapter.lineNumber - 1} belong to this chapter ONLY)`
+                        : `(ALL remaining scenes from line ${ch.lineNumber} to end belong to this chapter ONLY)`;
                     return `- Line ${ch.lineNumber}: "${ch.header}" → chapter_id: "${ch.chapterId}" ${endNote}`;
-                }).join('\n')}\n⚠️ CRITICAL: Use EXACTLY these chapter_ids for scenes. Do NOT create your own chapter boundaries!\n`
+                }).join('\n')}\n⚠️ ABSOLUTE RULE: Use EXACTLY these chapter_ids. Do NOT invent, split, or merge chapters. The chapter boundaries above are FINAL and determined by the user's script structure. Each scene's chapterId MUST match one of these pre-detected chapter_ids.\n`
                 : '';
 
             console.log(`[Chapter Detection] Found ${chapterMarkers.length} chapter boundaries`);
@@ -369,9 +382,12 @@ export function useScriptAnalysis(userApiKey: string | null) {
                 contextInstructions += `\n[USER DOP NOTES - MANDATORY CAMERA/LIGHTING CONTEXT]:\n${researchNotes.dop}\n- Apply these cinematography guidelines to visual prompts.\n`;
             }
 
-            // Expected Scene Count (Soft Target)
+            // Expected Scene Count (Soft Target - can be overridden by user)
             const wordsPerScene = readingSpeed === 'slow' ? 8 : readingSpeed === 'fast' ? 12 : 10;
-            const expectedSceneCount = Math.ceil(wordCount / wordsPerScene);
+            const autoExpectedCount = Math.ceil(wordCount / wordsPerScene);
+            const expectedSceneCount = sceneCountEstimate || autoExpectedCount;
+
+            console.log(`[ScriptAnalysis] Scene count: auto=${autoExpectedCount}, user=${sceneCountEstimate || 'none'}, final=${expectedSceneCount}`);
 
             // [New] Existing Character Library - Inject to avoid duplicates
             if (activeCharacters && activeCharacters.length > 0) {
@@ -417,7 +433,8 @@ Each of these patterns MUST become its OWN separate shot:
    - These are TWO shots, NOT one!
 
 4. **CHAPTER BOUNDARY DETECTION (CRITICAL FOR GROUPING)**:
-   Standalone lines with LOCATION + TIME/YEAR indicate a NEW CHAPTER (different group/location):
+   Any explicit [PART ...] bracket, or standalone lines with LOCATION + TIME/YEAR indicate a NEW CHAPTER (different group/location):
+   - "[PART A: HOOK — The Table Flip]" → NEW CHAPTER (Chapter: part_a_hook)
    - "Marseille, November 2019" → NEW CHAPTER (Chapter: marseille_2019)
    - "Rouen, France 1820s" → NEW CHAPTER (Chapter: rouen_1820s)
    - "Casino de Monte-Carlo, May 2019" → NEW CHAPTER (Chapter: montecarlo_2019)
@@ -506,6 +523,16 @@ Do NOT hide important actions inside B-rolls. They need to be MAIN scenes.
 Analyze and REWRITE the following voice-over script into a list of "VISUAL SHOTS".
 Don't worry about JSON format yet. Just simple text blocks.
 
+*** HARD CONSTRAINT - TARGET SCENE COUNT: EXACTLY ${expectedSceneCount} shots (±10%) ***
+${sceneCountEstimate ? `⚠️ The user has EXPLICITLY requested ${sceneCountEstimate} scenes. This is NOT a suggestion — it is a HARD REQUIREMENT. You MUST produce between ${Math.floor(sceneCountEstimate * 0.9)} and ${Math.ceil(sceneCountEstimate * 1.1)} shots.` : `Auto-estimated target: ~${expectedSceneCount} shots based on word count and reading speed.`}
+
+RULES FOR HITTING THE TARGET:
+- If you have MORE shots than target: MERGE similar/adjacent shots into one (combine their descriptions)
+- If you have FEWER shots than target: SPLIT long/complex shots into multiple angles
+- Each shot should cover roughly ${Math.ceil(wordCount / expectedSceneCount)} words of the script
+- Do NOT create micro-shots for single sentences unless dramatically important
+- Prioritize QUALITY over QUANTITY — each shot must be cinematically meaningful
+
 INPUT SCRIPT:
 """
 ${scriptText}
@@ -515,6 +542,7 @@ OUTPUT FORMAT:
 - Shot 1: [Visual Description] (Covers text: "...")
 - Shot 2: [Visual Description] (Covers text: "...")
 ...
+FINAL CHECK: Count your shots. If total is more than ${Math.ceil(expectedSceneCount * 1.1)}, MERGE shots until within range.
             `;
 
             // Call Step 1 (Clustering)
@@ -544,6 +572,13 @@ ${scriptText}
 ${visualPlan}
 """
 
+*** MANDATORY SCENE COUNT CONSTRAINT ***
+TARGET: ${expectedSceneCount} main scenes (±10%). Maximum allowed: ${Math.ceil(expectedSceneCount * 1.1)}.
+${sceneCountEstimate ? `The user explicitly requested ${sceneCountEstimate} scenes. You MUST respect this. Do NOT exceed ${Math.ceil(sceneCountEstimate * 1.1)} scenes in your "scenes" array.` : ''}
+- If the Visual Plan has more shots than target, MERGE adjacent shots with similar location/action into one scene
+- If you exceed the target, your response will be REJECTED. Merge scenes before outputting.
+- B-Roll expansionScenes do NOT count toward this limit, but keep them minimal (max 1-2 per main scene)
+
 TASK:
 1. Use the "Director's Visual Plan" as the SOURCE TRUTH for scene segmentation.
 2. Map the original script text (Voice Over) to these visual scenes.
@@ -551,31 +586,26 @@ TASK:
    - The \`voiceOverText\` must be the EXACT segment of the original script that corresponds to this visual.
    - DO NOT LEAVE \`voiceOverText\` EMPTY.
 3. Extract Characters, Locations, and Chapters as usual.
+4. FINAL CHECK: Count your scenes array. If length > ${Math.ceil(expectedSceneCount * 1.1)}, go back and merge scenes.
 
-CRITICAL - VOICE OVER vs DIALOGUE SEPARATION:
-You MUST correctly distinguish between these two types of text:
+CRITICAL - VOICE OVER vs DIALOGUE SEPARATION (YOUTUBE STORYTELLING STYLE):
+You MUST correctly handle narration and dialogue:
 
-**VOICE OVER (voiceOverText):**
-- Narration by an OFF-SCREEN narrator
-- Third-person descriptions: "He walks", "The rain falls", "A man enters"
-- Scene-setting: "March 2013, Baltimore", "Inside the warehouse"
-- Internal thoughts described: "He wondered if..."
-- ALL non-dialogue text goes here
+**VOICE OVER (voiceOverText) - THE MASTER SCRIPT:**
+- This is the ENTIRE script text for the scene, exactly as written, word-for-word.
+- It MUST include EVERYTHING the narrator will say, INCLUDING character quotes!
+- DO NOT STRIP or remove quotes from voiceOverText.
+- Example: "He looked at her. 'I can't do this,' he whispered." -> All of this goes into voiceOverText!
 
-**DIALOGUE (dialogueText + dialogueSpeaker):**
-- Direct speech by an ON-SCREEN character
-- Must be in quotes or preceded by speaker name
-- First/second person when character speaks: "I will find you", "You're under arrest"
-- Examples: 
-  - "Get on the ground!" (dialogueSpeaker: "Officer")
-  - "Why are you doing this?" (dialogueSpeaker: "Victim")
+**DIALOGUE (dialogueText + dialogueSpeaker) - OPTIONAL LIP-SYNC:**
+- IF there is direct character speech in quotes that a character will lip-sync to on-screen, copy it into \`dialogueText\` AND specify the \`dialogueSpeaker\`.
+- The quoted text STILL remains in the \`voiceOverText\` for the narrator.
+- If NO dialogue in the scene → dialogueText: null, dialogueSpeaker: null
 
 **RULES:**
-1. If text is DESCRIBING something (he, she, they, it) → voiceOverText
-2. If text is SOMEONE SPEAKING (I, you, quoted speech) → dialogueText + dialogueSpeaker
-3. If NO dialogue in the scene → dialogueText: null, dialogueSpeaker: null
-4. NEVER put Voice-Over narration in dialogueText
-5. NEVER put character speech in voiceOverText
+1. voiceOverText is the MASTER SCRIPT for the scene. It contains BOTH narration descriptions AND inline cinematic quotes.
+2. dialogueText is an OPTIONAL EXTRACTION of just the quotes for lip-syncing.
+3. NEVER remove text from voiceOverText just because it's a quote.
 
 CRITICAL - LOCATION ANCHOR RULE:
 - Each chapter MUST define a "locationAnchor" - a DETAILED, FIXED environment description
@@ -597,7 +627,8 @@ VISUAL PROMPT FORMAT:
 
 CRITICAL - DURATION & COVERAGE (B-ROLL LOGIC):
 - Merged scenes may have long Voice-Over text.
-- IF a scene's \`voiceOverText\` is > 15 words, you MUST generate \`expansionScenes\` (1-3 shots depending on length).
+- IF a scene's \`voiceOverText\` is > 15 words, you MAY generate \`expansionScenes\` (1-2 shots max).
+- ⚠️ Keep expansion scenes MINIMAL to avoid inflating the total scene count beyond the target of ${expectedSceneCount}.
 
 CRITICAL - VISUAL VARIETY (THE BBC 5-SHOT RULE):
 When creating B-Rolls, you MUST strictly follow the "5-Shot Coverage" principle to ensure editable footage.
@@ -722,6 +753,48 @@ RESPOND WITH JSON ONLY:
                 })),
                 globalContext: parsed.globalContext
             };
+
+            // ═══════════════════════════════════════════════════════════════
+            // POST-PROCESSING: Enforce Scene Count (Safety Net)
+            // If AI exceeded the user's target, merge shortest adjacent scenes
+            // ═══════════════════════════════════════════════════════════════
+            if (sceneCountEstimate && result.scenes.length > Math.ceil(sceneCountEstimate * 1.1)) {
+                const maxAllowed = Math.ceil(sceneCountEstimate * 1.1);
+                console.log(`[ScriptAnalysis] ⚠️ AI produced ${result.scenes.length} scenes but target is ${sceneCountEstimate} (max ${maxAllowed}). Merging excess...`);
+
+                while (result.scenes.length > maxAllowed && result.scenes.length > 2) {
+                    // Find the shortest scene (least voiceover text) that is NOT the first or last
+                    let shortestIdx = 1;
+                    let shortestLen = Infinity;
+                    for (let i = 1; i < result.scenes.length - 1; i++) {
+                        const len = (result.scenes[i].voiceOverText || '').length;
+                        if (len < shortestLen) {
+                            shortestLen = len;
+                            shortestIdx = i;
+                        }
+                    }
+
+                    // Merge with previous scene (combine voiceover text and visual prompt)
+                    const prevScene = result.scenes[shortestIdx - 1];
+                    const currScene = result.scenes[shortestIdx];
+
+                    prevScene.voiceOverText = ((prevScene.voiceOverText || '') + ' ' + (currScene.voiceOverText || '')).trim();
+                    prevScene.visualPrompt = ((prevScene.visualPrompt || '') + ' | ' + (currScene.visualPrompt || '')).trim();
+
+                    // Merge character names
+                    const mergedChars = new Set([...(prevScene.characterNames || []), ...(currScene.characterNames || [])]);
+                    prevScene.characterNames = Array.from(mergedChars);
+
+                    // Recalculate duration
+                    prevScene.estimatedDuration = Math.ceil(((prevScene.voiceOverText || '').split(/\s+/).length / wpm) * 60);
+
+                    // Remove merged scene
+                    result.scenes.splice(shortestIdx, 1);
+                }
+
+                result.suggestedSceneCount = result.scenes.length;
+                console.log(`[ScriptAnalysis] ✅ Merged down to ${result.scenes.length} scenes (target: ${sceneCountEstimate})`);
+            }
 
             // ═══════════════════════════════════════════════════════════════
             // POST-PROCESSING: Override chapterId based on voiceOverText position

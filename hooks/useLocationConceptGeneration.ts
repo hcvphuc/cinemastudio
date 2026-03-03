@@ -9,6 +9,7 @@ import { useState, useCallback, useRef } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { Location } from '../types';
 import { LocationAnalysis } from './useScriptAnalysis';
+import { base64ToBlobUrl } from '../utils/geminiUtils';
 
 interface GenerationProgress {
     current: number;
@@ -125,7 +126,7 @@ export function useLocationConceptGeneration(apiKey: string | null) {
                     throw new Error('No image generated');
                 }
 
-                const base64Image = `data:image/webp;base64,${imageData}`;
+                const base64Image = base64ToBlobUrl(imageData, 'image/webp');
 
                 // Create Location entity
                 const newLocation: Location = {

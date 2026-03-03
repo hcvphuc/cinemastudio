@@ -1,19 +1,22 @@
 /**
  * useExcelImport Hook
  * 
- * Parses Excel/CSV files and converts them into Scene, SceneGroup, and Character data
+ * Parses Excel/CSV files and converts them into Scene, SceneGroup, Character, and Product data
  * for bootstrapping a new project.
+ * 
+ * Enhanced: Automatically extracts character descriptions and products/props from scene text.
  */
 
 import { useCallback, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { Scene, SceneGroup, Character } from '../types';
+import { Scene, SceneGroup, Character, Product } from '../types';
 import { generateId } from '../utils/helpers';
 
 export interface ExcelImportResult {
     scenes: Scene[];
     groups: SceneGroup[];
     characters: Character[];
+    products: Product[];
 }
 
 export interface ColumnMapping {
@@ -151,10 +154,12 @@ export function useExcelImport() {
             const charMap: Record<string, Character> = {};
             Array.from(charNames).forEach(name => {
                 const id = generateId();
+                // Extract description from all scene rows mentioning this character
+                const description = buildCharacterDescription(name, rows, mapping);
                 charMap[name.toLowerCase()] = {
                     id,
                     name,
-                    description: '', // User will fill later
+                    description, // Auto-extracted from script scenes
                     faceImage: null,
                     masterImage: null,
                     bodyImage: null,
@@ -164,6 +169,9 @@ export function useExcelImport() {
                     isDefault: false
                 };
             });
+
+            // 2b. Extract products/props from scene descriptions
+            const productMap = extractProductsFromScenes(rows, mapping);
 
             // 3. Create scenes
             const scenes: Scene[] = [];
@@ -212,7 +220,8 @@ export function useExcelImport() {
             const result: ExcelImportResult = {
                 scenes,
                 groups: Object.values(groupMap),
-                characters: Object.values(charMap)
+                characters: Object.values(charMap),
+                products: Object.values(productMap)
             };
 
             console.log('[ExcelImport] ✅ Import complete:', {
@@ -269,4 +278,184 @@ export function useExcelImport() {
         autoDetectMapping,
         DEFAULT_MAPPING
     };
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS - Character & Product Extraction from Script Text
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Extract character description from all scene rows where this character appears.
+ * Looks for parenthetical descriptions like "(45, power suit, blonde hair slicked back)"
+ * and camera stage directions like "[CAMERA: Pan to MARGARET - 72, gray hair, worn cardigan]"
+ */
+function buildCharacterDescription(charName: string, rows: any[], mapping: ColumnMapping): string {
+    const nameLower = charName.toLowerCase();
+    const fragments: string[] = [];
+    const seen = new Set<string>();
+
+    for (const row of rows) {
+        // Search in all text-heavy columns
+        const textsToScan = [
+            String(row[mapping.visualContext] || ''),
+            String(row[mapping.voiceOver] || ''),
+            String(row[mapping.dialogue] || ''),
+            // Also check common extra columns from detailed CSVs
+            String(row['full_script_content'] || row['full_voiceover_text'] || ''),
+            String(row['scene_description'] || ''),
+        ].join(' ');
+
+        if (!textsToScan.toLowerCase().includes(nameLower)) continue;
+
+        // Strategy 1: Extract parenthetical descriptions after character name
+        // e.g., "KAREN WHITFIELD (45, HOA President, power suit, blonde hair slicked back)"
+        const parenRegex = new RegExp(
+            charName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\(([^)]+)\\)',
+            'gi'
+        );
+        let parenMatch;
+        while ((parenMatch = parenRegex.exec(textsToScan)) !== null) {
+            const desc = parenMatch[1].trim();
+            if (desc.length > 5 && !seen.has(desc.toLowerCase())) {
+                seen.add(desc.toLowerCase());
+                fragments.push(desc);
+            }
+        }
+
+        // Strategy 2: Extract camera stage directions describing the character
+        // e.g., "[CAMERA: Pan to MARGARET THOMPSON - 72, gray hair in simple bun, worn beige cardigan]"
+        // or "** Pan to MARGARET THOMPSON - 72, gray hair..."
+        const dashRegex = new RegExp(
+            charName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[-–—]\\s*([^\\]\\*\\n]+)',
+            'gi'
+        );
+        let dashMatch;
+        while ((dashMatch = dashRegex.exec(textsToScan)) !== null) {
+            const desc = dashMatch[1].trim().replace(/\]$/, '').trim();
+            if (desc.length > 5 && !seen.has(desc.toLowerCase())) {
+                seen.add(desc.toLowerCase());
+                fragments.push(desc);
+            }
+        }
+
+        // Strategy 3: Visual context that directly names the character with descriptors
+        // e.g., "Close-up angry woman yelling" when character_names column contains this char
+        const charNamesInRow = String(row[mapping.characterNames] || '').toLowerCase();
+        if (charNamesInRow.includes(nameLower)) {
+            const visual = String(row[mapping.visualContext] || '').trim();
+            // Only take visuals that seem to describe appearance (contain appearance keywords)
+            const appearanceKeywords = ['close-up', 'face', 'hair', 'wearing', 'dressed', 'outfit', 'suit', 'uniform', 'glasses', 'old', 'young', 'tall', 'short'];
+            if (visual && appearanceKeywords.some(kw => visual.toLowerCase().includes(kw))) {
+                const shortVisual = visual.substring(0, 150);
+                if (!seen.has(shortVisual.toLowerCase())) {
+                    seen.add(shortVisual.toLowerCase());
+                    fragments.push(shortVisual);
+                }
+            }
+        }
+    }
+
+    if (fragments.length === 0) {
+        return ''; // No description found
+    }
+
+    // Combine and cap at 600 characters
+    const combined = fragments.join('. ');
+    const result = combined.length > 600 ? combined.substring(0, 597) + '...' : combined;
+
+    console.log(`[ExcelImport] 📝 Character "${charName}" description extracted:`, result.substring(0, 100) + '...');
+    return result;
+}
+
+/**
+ * Extract unique products/props/weapons from scene visual descriptions.
+ * Uses keyword patterns to detect important physical objects.
+ */
+function extractProductsFromScenes(rows: any[], mapping: ColumnMapping): Record<string, Product> {
+    const productMap: Record<string, Product> = {};
+
+    // Common prop/weapon patterns to detect in visual descriptions
+    const propPatterns = [
+        // Documents & Legal
+        /\b(eviction notice|legal document|deed|title deed|manila envelope|official documents?|folder|contract)\b/gi,
+        // Weapons
+        /\b(gun|pistol|rifle|shotgun|sword|knife|dagger|blade|axe|bow|spear|shield|hammer|mace)\b/gi,
+        // Technology
+        /\b(laptop|phone|tablet|camera|radio|walkie.?talkie|monitor|computer)\b/gi,
+        // Vehicles
+        /\b(car|truck|motorcycle|helicopter|boat|ship|bicycle|van|ambulance|police car)\b/gi,
+        // Furniture & Props
+        /\b(gavel|podium|nameplate|badge|key|keychain|handcuffs|flashlight|lantern|torch)\b/gi,
+    ];
+
+    // Also check product_names column if mapped
+    const explicitProducts = new Set<string>();
+    rows.forEach(row => {
+        const names = String(row[mapping.productNames] || '').split(',').map(n => n.trim()).filter(Boolean);
+        names.forEach(n => explicitProducts.add(n));
+    });
+
+    // Add explicit products first
+    explicitProducts.forEach(name => {
+        const key = name.toLowerCase();
+        if (!productMap[key]) {
+            productMap[key] = {
+                id: generateId(),
+                name,
+                description: name,
+                masterImage: null,
+                views: { front: null, back: null, left: null, right: null, top: null },
+                isAnalyzing: false
+            };
+        }
+    });
+
+    // Scan visual contexts for props (limit to important/recurring ones)
+    const propMentionCount: Record<string, number> = {};
+    rows.forEach(row => {
+        const text = [
+            String(row[mapping.visualContext] || ''),
+            String(row['scene_description'] || ''),
+            String(row['visual_keywords'] || ''),
+        ].join(' ');
+
+        for (const pattern of propPatterns) {
+            let match;
+            // Reset lastIndex for global regex
+            pattern.lastIndex = 0;
+            while ((match = pattern.exec(text)) !== null) {
+                const propName = match[1].toLowerCase().trim();
+                if (propName.length >= 3) {
+                    propMentionCount[propName] = (propMentionCount[propName] || 0) + 1;
+                }
+            }
+        }
+    });
+
+    // Only add props that appear at least 2 times (to filter noise)
+    Object.entries(propMentionCount)
+        .filter(([, count]) => count >= 2)
+        .sort(([, a], [, b]) => b - a) // Most mentioned first
+        .slice(0, 10) // Max 10 auto-detected props
+        .forEach(([propName, count]) => {
+            if (!productMap[propName]) {
+                // Capitalize first letter
+                const displayName = propName.charAt(0).toUpperCase() + propName.slice(1);
+                productMap[propName] = {
+                    id: generateId(),
+                    name: displayName,
+                    description: `${displayName} - referenced ${count} times in script`,
+                    masterImage: null,
+                    views: { front: null, back: null, left: null, right: null, top: null },
+                    isAnalyzing: false
+                };
+            }
+        });
+
+    if (Object.keys(productMap).length > 0) {
+        console.log(`[ExcelImport] 🎯 Extracted ${Object.keys(productMap).length} products/props:`,
+            Object.values(productMap).map(p => p.name));
+    }
+
+    return productMap;
 }

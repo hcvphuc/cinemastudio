@@ -145,9 +145,23 @@ export function useStateManager() {
             stateRef.current = newState; // Ensure ref is updated immediately for loops/async functions
             setHistory(h => {
                 const newPast = [...h.past, prevState];
-                if (newPast.length > 50) newPast.shift();
+                if (newPast.length > 20) newPast.shift(); // Reduced from 50 to prevent memory bloat with base64 images
                 return { past: newPast, future: [] };
             });
+            return newState;
+        });
+    }, []);
+
+    /**
+     * Update state WITHOUT recording undo history.
+     * Use this for batch operations (e.g., post-import image generation)
+     * to prevent memory bloat from storing dozens of state snapshots
+     * containing large base64 image strings.
+     */
+    const updateStateWithoutHistory = useCallback((updater: (prevState: ProjectState) => ProjectState) => {
+        setState(prevState => {
+            const newState = updater(prevState);
+            stateRef.current = newState;
             return newState;
         });
     }, []);
@@ -214,6 +228,7 @@ export function useStateManager() {
         stateRef,
         history,
         updateStateAndRecord,
+        updateStateWithoutHistory,
         undo,
         redo,
         handleSave,

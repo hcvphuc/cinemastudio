@@ -15,7 +15,9 @@ import { useScriptAnalysis, ScriptAnalysisResult } from '../../hooks/useScriptAn
 import { useResearchPresets, ResearchPreset } from '../../hooks/useResearchPresets';
 import { GoogleGenAI } from "@google/genai";
 import { generateId } from '../../utils/helpers';
-import { processScriptToParts, getElevenLabsZipFilename } from '../../utils/elevenLabsFormatter';
+import { processScriptToParts, processScriptToPartsSync, getElevenLabsZipFilename } from '../../utils/elevenLabsFormatter';
+
+declare const JSZip: any;
 
 interface ManualScriptModalProps {
     isOpen: boolean;
@@ -235,31 +237,29 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
     const [isExportingVO, setIsExportingVO] = useState(false);
     const [exportProgress, setExportProgress] = useState('');
 
-    // Handler for exporting ElevenLabs-ready voiceover as ZIP (AI-only, requires API key)
+    // Handler for exporting ElevenLabs-ready voiceover as ZIP (1 file per PART)
     const handleExportElevenLabsVO = useCallback(async () => {
         if (!scriptText.trim()) return;
-        if (!userApiKey) {
-            alert('Vui lòng nhập Gemini API Key trước khi export VO.');
-            return;
-        }
         setIsExportingVO(true);
         setExportProgress('Splitting script...');
         try {
-            console.log('[ManualScript] Exporting ElevenLabs VO with AI (per-PART)...');
-            console.log('[ManualScript] API Key:', userApiKey.substring(0, 8) + '...');
-            console.log('[ManualScript] Script length:', scriptText.length, 'chars');
-
-            const partFiles = await processScriptToParts(scriptText, userApiKey, {
-                stripAfterEnd: true,
-            }, setExportProgress);
+            let partFiles;
+            if (userApiKey) {
+                console.log('[ManualScript] Exporting ElevenLabs VO with AI (per-PART)...');
+                partFiles = await processScriptToParts(scriptText, {
+                    useAI: true,
+                    apiKey: userApiKey,
+                    stripAfterEnd: true,
+                });
+            } else {
+                console.log('[ManualScript] Exporting ElevenLabs VO (simple mode)...');
+                partFiles = processScriptToPartsSync(scriptText);
+            }
 
             setExportProgress(`Packaging ${partFiles.length} files...`);
-            console.log('[ManualScript] Got', partFiles.length, 'part files, packaging...');
 
-            // Package into ZIP using window.JSZip
-            const JSZipLib = (window as any).JSZip;
-            if (!JSZipLib) {
-                console.log('[ManualScript] JSZip not available, downloading individual files');
+            // Package into ZIP
+            if (typeof JSZip === 'undefined' || !JSZip) {
                 // Fallback: download individual files
                 for (const pf of partFiles) {
                     const blob = new Blob([pf.content], { type: 'text/plain;charset=utf-8' });
@@ -273,7 +273,7 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                     URL.revokeObjectURL(url);
                 }
             } else {
-                const zip = new JSZipLib();
+                const zip = new JSZip();
                 for (const pf of partFiles) {
                     zip.file(pf.filename, pf.content);
                 }
@@ -288,11 +288,22 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                 URL.revokeObjectURL(url);
             }
 
-            console.log(`[ManualScript] ✅ Exported ${partFiles.length} ElevenLabs VO files`);
-        } catch (err: any) {
+            console.log(`[ManualScript] Exported ${partFiles.length} ElevenLabs VO files`);
+        } catch (err) {
             console.error('[ManualScript] ElevenLabs export error:', err);
-            const errMsg = err?.message || err?.toString() || 'Unknown error';
-            alert(`Export VO thất bại:\n${errMsg}\n\nVui lòng kiểm tra API key và console log.`);
+            // Fallback to sync simple
+            const partFiles = processScriptToPartsSync(scriptText);
+            for (const pf of partFiles) {
+                const blob = new Blob([pf.content], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = pf.filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }
         } finally {
             setIsExportingVO(false);
             setExportProgress('');
@@ -524,7 +535,7 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                                             <Upload size={12} />
                                             Import .md
                                         </button>
-                                        {scriptText.trim() && userApiKey && (
+                                        {scriptText.trim() && (
                                             <button
                                                 onClick={handleExportElevenLabsVO}
                                                 disabled={isExportingVO}

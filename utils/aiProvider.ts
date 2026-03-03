@@ -335,11 +335,24 @@ let cachedProviderKey: string = '';
  */
 export function getAIProvider(apiKeyOverride?: string): AIProvider {
     const config = getProviderConfig();
-    const providerType = config.type;
     const apiKey = apiKeyOverride || getActiveApiKey();
 
     if (!apiKey) {
         throw new Error('No API key configured. Please set your API key in Settings.');
+    }
+
+    // Auto-detect provider type from key format when override is used
+    // This prevents mismatches (e.g. Gemini key used with VertexKey provider)
+    let providerType: ProviderType;
+    if (apiKeyOverride) {
+        // Detect from key format
+        if (apiKeyOverride.startsWith('vai-')) {
+            providerType = 'vertex-key';
+        } else {
+            providerType = 'gemini'; // AIza... or any other key = treat as Gemini Direct
+        }
+    } else {
+        providerType = config.type;
     }
 
     const cacheKey = `${providerType}:${apiKey}`;
@@ -358,7 +371,7 @@ export function getAIProvider(apiKeyOverride?: string): AIProvider {
     }
 
     cachedProviderKey = cacheKey;
-    console.log(`[AIProvider] Created ${providerType} provider`);
+    console.log(`[AIProvider] Created ${providerType} provider (key: ${apiKey.substring(0, 8)}...)`);
     return cachedProvider;
 }
 

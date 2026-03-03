@@ -29,6 +29,7 @@ import { KeyboardShortcuts } from './components/common/KeyboardShortcuts';
 import { LocationLibraryPanel } from './components/locations'; // NEW: Location Library
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { syncDirectorBrain } from './utils/directorBrain';
+import { getActiveApiKey, setProviderConfig } from './utils/aiProvider';
 import { APP_NAME, PRIMARY_GRADIENT, PRIMARY_GRADIENT_HOVER } from './constants/presets';
 import { handleDownloadAll, saveProjectPackage } from './utils/zipUtils';
 import {
@@ -107,7 +108,7 @@ const App: React.FC = () => {
 
     const [editingCharacterId, setEditingCharacterId] = useState<string | null>(null);
     const [editingProductId, setEditingProductId] = useState<string | null>(null);
-    const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem('geminiApiKey') || '');
+    const [userApiKey, setUserApiKey] = useState(() => getActiveApiKey());
     const [headerSticky, setHeaderSticky] = useState(false);
     const [showSuccessToast, setShowSuccessToast] = useState<string | null>(null);
     const [isContinuityMode, setIsContinuityMode] = useState(true);
@@ -1064,6 +1065,7 @@ const App: React.FC = () => {
                         setApiKey={(key: string) => {
                             setUserApiKey(key);
                             localStorage.setItem('geminiApiKey', key);
+                            setProviderConfig({ geminiApiKey: key });
                         }}
                         subscriptionExpired={subscriptionExpired}
                         onSignOut={handleSignOut}

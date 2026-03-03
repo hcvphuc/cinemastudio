@@ -1,17 +1,19 @@
 /**
- * ElevenLabs TTS Formatter v3
+ * ElevenLabs TTS Formatter v4
  * 
- * Splits script by PART → processes each with AI → downloads as ZIP
- * Each PART becomes a separate .txt file with rich audio tags.
+ * - AI-only mode (requires API key)
+ * - Splits by PART, then sub-splits if > 4000 chars (at sentence boundary)
+ * - No PART header line inside generated files
+ * - Downloads as ZIP
  */
 
 import { GoogleGenAI } from "@google/genai";
 
 export interface ElevenLabsConfig {
-    useAI: boolean;
-    apiKey?: string;
+    apiKey: string;
     model?: string;
     stripAfterEnd: boolean;
+    maxCharsPerFile: number;  // ElevenLabs limit
 }
 
 export interface PartFile {
@@ -20,15 +22,15 @@ export interface PartFile {
     content: string;
 }
 
-const DEFAULT_CONFIG: ElevenLabsConfig = {
-    useAI: false,
+const DEFAULT_CONFIG: Partial<ElevenLabsConfig> = {
     stripAfterEnd: true,
+    maxCharsPerFile: 4000,
 };
 
 /**
  * Split preprocessed script into PART sections
  */
-export function splitIntoParts(preprocessedText: string, stripAfterEnd: boolean = true): { partLabel: string; content: string }[] {
+function splitIntoParts(preprocessedText: string, stripAfterEnd: boolean = true): { partLabel: string; content: string }[] {
     const lines = preprocessedText.split('\n');
     const parts: { partLabel: string; content: string }[] = [];
     let currentPartLabel = 'Intro';
@@ -48,12 +50,10 @@ export function splitIntoParts(preprocessedText: string, stripAfterEnd: boolean 
         // Detect [PART X: TITLE — Subtitle]
         const partMatch = trimmed.match(/^\[PART\s+([A-Z0-9]+)[:\s]+(.+)\]$/i);
         if (partMatch) {
-            // Save previous part
             const content = currentLines.join('\n').trim();
             if (content) {
                 parts.push({ partLabel: currentPartLabel, content });
             }
-            // Start new part
             const partLetter = partMatch[1];
             const partTitle = partMatch[2].trim();
             currentPartLabel = `Part ${partLetter} - ${partTitle}`;
@@ -112,85 +112,79 @@ export function splitIntoParts(preprocessedText: string, stripAfterEnd: boolean 
 }
 
 /**
- * Simple (non-AI) formatter — per-sentence audio tags
+ * Split text into chunks <= maxChars, breaking at sentence boundaries (after periods)
  */
-function formatSimple(text: string, partLabel: string): string {
-    const lines = text.split('\n');
-    const result: string[] = [];
+function splitAtSentenceBoundary(text: string, maxChars: number): string[] {
+    if (text.length <= maxChars) return [text];
 
-    // Emotion tag pool for variety
-    const emotionTags = [
-        '[cold, deliberate]', '[tense, low voice]', '[calculating]', '[dark, revealing]',
-        '[intense, methodical]', '[analytical]', '[cold, factual]', '[low, intense]',
-        '[building intensity]', '[methodical]', '[revealing]', '[thoughtful]',
-        '[dark, measured]', '[ominous]', '[reflective]'
-    ];
-    const pauseTags = ['[pause]', '[strategic pause]', '[calculated pause]'];
-    const breathTags = ['[inhales]', '[exhales]', '[exhales sharply]'];
-    let emotionIdx = 0;
+    const chunks: string[] = [];
+    let remaining = text;
 
-    // Add part header
-    result.push(`[thoughtful, deliberate] ${partLabel}. ${breathTags[0]}`);
-    result.push('');
+    while (remaining.length > 0) {
+        if (remaining.length <= maxChars) {
+            chunks.push(remaining.trim());
+            break;
+        }
 
-    for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) { result.push(''); continue; }
+        // Find the last sentence boundary (. ! ? followed by space/newline) within maxChars
+        let splitPos = -1;
+        const searchArea = remaining.substring(0, maxChars);
 
-        // Split line into sentences by period, question mark, exclamation
-        // Keep the delimiter attached to enable tagging after each
-        const sentences = trimmed.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [trimmed];
-
-        if (sentences.length <= 1) {
-            // Single sentence
-            const tag = emotionTags[emotionIdx % emotionTags.length];
-            emotionIdx++;
-            if (trimmed.endsWith('?')) {
-                result.push(`[calculating] ${trimmed}`);
-            } else if (trimmed.length < 30 && !trimmed.includes(',')) {
-                result.push(`${tag} ${trimmed} [pause]`);
-            } else if (trimmed.startsWith('"') || trimmed.startsWith('\u201C')) {
-                result.push(`[dramatic] ${trimmed}`);
-            } else {
-                result.push(`${tag} ${trimmed}`);
+        // Search backwards for the last sentence-ending punctuation followed by whitespace
+        for (let i = searchArea.length - 1; i >= Math.floor(maxChars * 0.5); i--) {
+            const char = searchArea[i];
+            if ((char === '.' || char === '!' || char === '?') &&
+                (i + 1 >= searchArea.length || /[\s\n]/.test(searchArea[i + 1]))) {
+                splitPos = i + 1;
+                break;
             }
-        } else {
-            // Multiple sentences → add tags between each
-            const parts: string[] = [];
-            for (let i = 0; i < sentences.length; i++) {
-                const s = sentences[i].trim();
-                if (!s) continue;
+        }
 
-                if (i === 0) {
-                    // First sentence: add emotion tag before
-                    const tag = emotionTags[emotionIdx % emotionTags.length];
-                    emotionIdx++;
-                    parts.push(`${tag} ${s}`);
-                } else {
-                    // Subsequent: add pause/emotion tag between
-                    const pause = pauseTags[i % pauseTags.length];
-                    if (i % 3 === 0) {
-                        // Every 3rd sentence also add a breath tag
-                        const breath = breathTags[i % breathTags.length];
-                        parts.push(`${pause} ${breath} ${s}`);
-                    } else if (s.endsWith('?')) {
-                        parts.push(`${pause} [calculating] ${s}`);
-                    } else {
-                        const tag = emotionTags[emotionIdx % emotionTags.length];
-                        emotionIdx++;
-                        parts.push(`${pause} ${tag} ${s}`);
-                    }
+        // If no sentence boundary found in the safe range, try harder (look in first half)
+        if (splitPos === -1) {
+            for (let i = Math.floor(maxChars * 0.5) - 1; i >= 100; i--) {
+                const char = searchArea[i];
+                if ((char === '.' || char === '!' || char === '?')) {
+                    splitPos = i + 1;
+                    break;
                 }
             }
-            result.push(parts.join(' '));
         }
+
+        // Last resort: split at maxChars
+        if (splitPos === -1) {
+            splitPos = maxChars;
+        }
+
+        chunks.push(remaining.substring(0, splitPos).trim());
+        remaining = remaining.substring(splitPos).trim();
     }
 
-    return result.join('\n');
+    return chunks;
 }
 
 /**
- * AI-powered formatter for a single PART
+ * Strip PART header lines from AI output
+ * Removes lines like: [thoughtful, deliberate] Part A. The Hook. [inhales]
+ */
+function stripPartHeaders(text: string): string {
+    return text
+        .split('\n')
+        .filter(line => {
+            const t = line.trim();
+            // Remove lines that are Part headers with audio tags
+            if (/^\[.*?\]\s*Part\s+[A-Z0-9]+/i.test(t)) return false;
+            // Remove plain Part headers
+            if (/^Part\s+[A-Z0-9]+[\s.\-—]/i.test(t) && t.length < 120) return false;
+            return true;
+        })
+        .join('\n')
+        .replace(/^\n+/, '') // Remove leading empty lines
+        .trim();
+}
+
+/**
+ * AI-powered formatter for a single PART (no PART header in output)
  */
 async function formatPartWithAI(
     ai: GoogleGenAI,
@@ -203,7 +197,7 @@ async function formatPartWithAI(
 Take this "${partLabel}" section and add inline audio direction tags for PREMIUM YouTube storytelling narration.
 
 RULES:
-1. Start with the part header: "[thoughtful, investigative] ${partLabel}. [inhales]"
+1. DO NOT include any part header line. Start directly with the narration content.
 2. CRITICAL: Add audio tags AFTER EVERY period/sentence. EVERY sentence must have a tag before it or after the previous period:
    - [emotion tag] before sentence: [cold, deliberate], [tense, low voice], [calculating, building], [dark, revealing], [intense], [analytical], [philosophical], etc.
    - [pause], [strategic pause], [calculated pause] AFTER each period, before next sentence
@@ -212,11 +206,10 @@ RULES:
 4. Break long sentences into shorter fragments with periods and [pause] tags for natural TTS pacing.
 5. DO NOT add or remove any content text. Only ADD audio direction tags.
 6. DO NOT add stage directions or descriptions. ONLY [bracketed] audio tags.
-7. Output ONLY the enhanced script text. No markdown. No explanations.
+7. DO NOT start with the part name/header. Jump straight into the narration.
+8. Output ONLY the enhanced script text. No markdown. No explanations.
 
-EXAMPLE showing per-sentence detail:
-[thoughtful, deliberate] Part A. [pause] The Hook. [inhales]
-
+EXAMPLE OUTPUT (notice: no part header, starts directly with content):
 [cold, deliberate] Are you WATCHING? [strategic pause] Because what happens next. [pause] I PROMISE you. [calculated pause] will NOT believe your eyes. [exhales]
 
 [tense, low voice] 6:47 PM. [pause] Riverside Glen Community Center. [inhales] A man walks in. [strategic pause] [dark, revealing] Blue surgical scrubs. [pause] Wrinkled. [calculated pause] Stains still fresh. [pause] He hasn't slept in thirty-six HOURS. [exhales sharply]
@@ -225,7 +218,6 @@ EXAMPLE showing per-sentence detail:
 
 INPUT:
 ${content}`;
-
 
     try {
         console.log(`[ElevenLabs AI] Processing: ${partLabel} (${content.length} chars)...`);
@@ -246,82 +238,72 @@ ${content}`;
             result = result.replace(/^```\w*\n?/, '').replace(/\n?```$/, '').trim();
         }
 
+        // Strip any PART headers AI might have added despite instructions
+        result = stripPartHeaders(result);
+
         if (result.length > 0) {
             console.log(`[ElevenLabs AI] ✅ ${partLabel}: ${result.length} chars output`);
             return result;
         }
     } catch (err: any) {
         console.error(`[ElevenLabs AI] ❌ ${partLabel} failed:`, err?.message || err);
+        throw err; // Propagate to caller
     }
 
-    // Fallback
-    console.log(`[ElevenLabs AI] ⚠️ ${partLabel}: using simple format fallback`);
-    return formatSimple(content, partLabel);
+    throw new Error(`AI returned empty result for ${partLabel}`);
 }
 
 /**
- * Main: process script → array of PartFile objects
+ * Main: process script → array of PartFile objects (AI only, requires apiKey)
  */
 export async function processScriptToParts(
     scriptText: string,
+    apiKey: string,
     userConfig?: Partial<ElevenLabsConfig>
 ): Promise<PartFile[]> {
     const config = { ...DEFAULT_CONFIG, ...userConfig };
+    const maxChars = config.maxCharsPerFile || 4000;
 
-    // Step 1: Split into parts
-    const parts = splitIntoParts(scriptText, config.stripAfterEnd);
+    // Step 1: Split into PART sections
+    const parts = splitIntoParts(scriptText, config.stripAfterEnd !== false);
     console.log(`[ElevenLabs] Split script into ${parts.length} parts:`, parts.map(p => p.partLabel));
 
-    // Step 2: Format each part
-    const results: PartFile[] = [];
+    // Step 2: Format each part with AI
+    const ai = new GoogleGenAI({ apiKey });
+    const modelName = config.model || 'gemini-2.0-flash';
     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const results: PartFile[] = [];
+    let fileCounter = 1;
 
-    if (config.useAI && config.apiKey) {
-        const ai = new GoogleGenAI({ apiKey: config.apiKey });
-        const modelName = config.model || 'gemini-2.0-flash';
+    for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        const formatted = await formatPartWithAI(ai, modelName, part.partLabel, part.content);
+        const safeLabel = part.partLabel.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, '_');
 
-        for (let i = 0; i < parts.length; i++) {
-            const part = parts[i];
-            const formatted = await formatPartWithAI(ai, modelName, part.partLabel, part.content);
-            const safeLabel = part.partLabel.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, '_');
+        // Step 3: Sub-split if > maxChars
+        const chunks = splitAtSentenceBoundary(formatted, maxChars);
+
+        if (chunks.length === 1) {
             results.push({
-                filename: `${timestamp}_${String(i + 1).padStart(2, '0')}_${safeLabel}.txt`,
+                filename: `${timestamp}_${String(fileCounter).padStart(2, '0')}_${safeLabel}.txt`,
                 partLabel: part.partLabel,
-                content: formatted,
+                content: chunks[0],
             });
-        }
-    } else {
-        for (let i = 0; i < parts.length; i++) {
-            const part = parts[i];
-            const formatted = formatSimple(part.content, part.partLabel);
-            const safeLabel = part.partLabel.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, '_');
-            results.push({
-                filename: `${timestamp}_${String(i + 1).padStart(2, '0')}_${safeLabel}.txt`,
-                partLabel: part.partLabel,
-                content: formatted,
-            });
+            fileCounter++;
+        } else {
+            console.log(`[ElevenLabs] ${part.partLabel}: ${formatted.length} chars → split into ${chunks.length} files`);
+            for (let j = 0; j < chunks.length; j++) {
+                results.push({
+                    filename: `${timestamp}_${String(fileCounter).padStart(2, '0')}_${safeLabel}_${j + 1}of${chunks.length}.txt`,
+                    partLabel: `${part.partLabel} (${j + 1}/${chunks.length})`,
+                    content: chunks[j],
+                });
+                fileCounter++;
+            }
         }
     }
 
     return results;
-}
-
-/**
- * Synchronous version (simple format only)
- */
-export function processScriptToPartsSync(scriptText: string): PartFile[] {
-    const parts = splitIntoParts(scriptText, true);
-    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-
-    return parts.map((part, i) => {
-        const formatted = formatSimple(part.content, part.partLabel);
-        const safeLabel = part.partLabel.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, '_');
-        return {
-            filename: `${timestamp}_${String(i + 1).padStart(2, '0')}_${safeLabel}.txt`,
-            partLabel: part.partLabel,
-            content: formatted,
-        };
-    });
 }
 
 /**

@@ -383,16 +383,40 @@ export function clearProviderCache(): void {
 
 /**
  * Validate an API key by making a minimal test call.
+ * For vertex-key: uses /models endpoint (lightweight, always available).
+ * For gemini: uses a minimal generateText call.
  */
 export async function validateApiKey(type: ProviderType, apiKey: string): Promise<boolean> {
     try {
-        const provider = createProvider(type, apiKey);
-        const result = await provider.generateText('Say "ok"', {
-            model: type === 'vertex-key' ? 'gemini-2.5-flash' : 'gemini-2.5-flash',
-            maxOutputTokens: 10,
-        });
-        return result.text.length > 0;
+        if (type === 'vertex-key') {
+            // Use /models endpoint — lightweight and reliable
+            const response = await fetch('https://vertex-key.com/api/v1/models', {
+                headers: { 'Authorization': `Bearer ${apiKey.trim()}` },
+            });
+            if (response.status === 401 || response.status === 403) return false;
+            if (response.ok) {
+                const data = await response.json();
+                return Array.isArray(data?.data) && data.data.length > 0;
+            }
+            // 502/503 = server issue, not key issue — still validate key format
+            if (response.status >= 500) {
+                // Key format check: must start with vai-
+                return apiKey.trim().startsWith('vai-') && apiKey.trim().length > 10;
+            }
+            return false;
+        } else {
+            const provider = createProvider(type, apiKey);
+            const result = await provider.generateText('Say "ok"', {
+                model: 'gemini-2.5-flash',
+                maxOutputTokens: 10,
+            });
+            return result.text.length > 0;
+        }
     } catch {
+        // For vertex-key, accept if format looks valid (server might be down)
+        if (type === 'vertex-key') {
+            return apiKey.trim().startsWith('vai-') && apiKey.trim().length > 10;
+        }
         return false;
     }
 }

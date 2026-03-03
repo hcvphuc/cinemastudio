@@ -2,12 +2,11 @@
  * ElevenLabs TTS Formatter v4
  * 
  * - AI-only mode (requires API key)
+ * - Uses direct fetch() to Gemini REST API (no SDK dependency)
  * - Splits by PART, then sub-splits if > 4000 chars (at sentence boundary)
  * - No PART header line inside generated files
  * - Downloads as ZIP
  */
-
-import { GoogleGenAI } from "@google/genai";
 
 export interface ElevenLabsConfig {
     apiKey: string;
@@ -184,10 +183,41 @@ function stripPartHeaders(text: string): string {
 }
 
 /**
+ * Call Gemini API directly via fetch (avoids SDK browser issues)
+ */
+async function callGeminiAPI(apiKey: string, model: string, prompt: string): Promise<string> {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    const body = {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 16384,
+        }
+    };
+
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        const errMsg = errData?.error?.message || `HTTP ${resp.status} ${resp.statusText}`;
+        throw new Error(errMsg);
+    }
+
+    const data = await resp.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+    return text;
+}
+
+/**
  * AI-powered formatter for a single PART (no PART header in output)
  */
 async function formatPartWithAI(
-    ai: GoogleGenAI,
+    apiKey: string,
     modelName: string,
     partLabel: string,
     content: string
@@ -222,16 +252,7 @@ ${content}`;
     try {
         console.log(`[ElevenLabs AI] Processing: ${partLabel} (${content.length} chars)...`);
 
-        const response = await ai.models.generateContent({
-            model: modelName,
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            config: {
-                temperature: 0.7,
-                maxOutputTokens: 16384,
-            }
-        });
-
-        let result = response.text?.trim() || '';
+        let result = await callGeminiAPI(apiKey, modelName, prompt);
 
         // Strip markdown code blocks if AI wrapped it
         if (result.startsWith('```')) {
@@ -247,7 +268,7 @@ ${content}`;
         }
     } catch (err: any) {
         console.error(`[ElevenLabs AI] ❌ ${partLabel} failed:`, err?.message || err);
-        throw err; // Propagate to caller
+        throw err;
     }
 
     throw new Error(`AI returned empty result for ${partLabel}`);
@@ -269,8 +290,7 @@ export async function processScriptToParts(
     const parts = splitIntoParts(scriptText, config.stripAfterEnd !== false);
     console.log(`[ElevenLabs] Split script into ${parts.length} parts:`, parts.map(p => p.partLabel));
 
-    // Step 2: Format each part with AI
-    const ai = new GoogleGenAI({ apiKey });
+    // Step 2: Format each part with AI (direct fetch, no SDK)
     const modelName = config.model || 'gemini-2.5-flash';
     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
     const results: PartFile[] = [];
@@ -279,7 +299,7 @@ export async function processScriptToParts(
     for (let i = 0; i < parts.length; i++) {
         const part = parts[i];
         onProgress?.(`AI: ${part.partLabel} (${i + 1}/${parts.length})...`);
-        const formatted = await formatPartWithAI(ai, modelName, part.partLabel, part.content);
+        const formatted = await formatPartWithAI(apiKey, modelName, part.partLabel, part.content);
         const safeLabel = part.partLabel.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, '_');
 
         // Step 3: Sub-split if > maxChars

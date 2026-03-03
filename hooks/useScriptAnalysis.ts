@@ -9,7 +9,8 @@
  */
 
 import { useState, useCallback } from 'react';
-import { getAIProvider } from '../utils/aiProvider';
+import { getAIProvider, getFallbackProvider } from '../utils/aiProvider';
+import type { AIProvider } from '../utils/aiProvider';
 import { Scene, SceneGroup, Character, CharacterStyleDefinition } from '../types';
 import { DirectorPreset, DIRECTOR_PRESETS } from '../constants/directors';
 import { resolveStyleWithInheritance } from '../constants/characterStyles';
@@ -591,9 +592,29 @@ ${isVideoZone ? `- [VIDEO] Shot 1: [Visual Description] (Covers text: "...")
 FINAL CHECK: Count your shots. ${isVideoZone ? `You MUST have EXACTLY ${videoScenes} [VIDEO] shots and ${staticScenes} [STATIC] shots = ${totalZoneScenes} total.` : `If total is more than ${Math.ceil(expectedSceneCount * 1.1)}, MERGE shots until within range.`}
             `;
 
+            // Helper: call provider with auto-fallback
+            const callWithFallback = async (
+                primaryProvider: AIProvider,
+                prompt: string,
+                config?: any
+            ) => {
+                try {
+                    return await primaryProvider.generateText(prompt, config);
+                } catch (primaryError: any) {
+                    console.warn(`[ScriptAnalysis] ⚠️ Primary provider (${primaryProvider.type}) failed:`, primaryError.message);
+                    const fallback = getFallbackProvider();
+                    if (fallback) {
+                        console.log(`[ScriptAnalysis] ⚡ Retrying with fallback provider (${fallback.type})...`);
+                        return await fallback.generateText(prompt, config);
+                    }
+                    throw primaryError; // No fallback available
+                }
+            };
+
             // Call Step 1 (Clustering)
             // Use gemini-2.5-flash for speed if not generating JSON
-            const clusteringResult = await provider.generateText(
+            const clusteringResult = await callWithFallback(
+                provider,
                 clusteringSystemPrompt + "\n\n" + clusteringUserPrompt,
                 { model: 'gemini-2.5-flash' }
             );
@@ -766,7 +787,7 @@ RESPOND WITH JSON ONLY:
 
 
             setAnalysisStage('connecting');
-            const jsonResult = await provider.generateText(prompt, {
+            const jsonResult = await callWithFallback(provider, prompt, {
                 model: modelName,
                 temperature: 0.3,
                 responseMimeType: 'application/json',

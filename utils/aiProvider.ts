@@ -376,6 +376,29 @@ export function getAIProvider(apiKeyOverride?: string): AIProvider {
 }
 
 /**
+ * Get a fallback provider when the primary one fails.
+ * If primary is vertex-key and a Gemini key exists → return GeminiProvider.
+ * Returns null if no fallback is available.
+ */
+export function getFallbackProvider(): AIProvider | null {
+    const config = getProviderConfig();
+
+    // If primary is vertex-key, try Gemini Direct as fallback
+    if (config.type === 'vertex-key' && config.geminiApiKey) {
+        console.log('[AIProvider] ⚡ Falling back to Gemini Direct provider');
+        return new GeminiProvider(config.geminiApiKey);
+    }
+
+    // If primary is gemini, try vertex-key as fallback
+    if (config.type === 'gemini' && config.vertexKeyApiKey) {
+        console.log('[AIProvider] ⚡ Falling back to Vertex Key provider');
+        return new VertexKeyProvider(config.vertexKeyApiKey);
+    }
+
+    return null;
+}
+
+/**
  * Create a provider for a specific type (ignoring global settings).
  * Useful for testing or one-off calls.
  */

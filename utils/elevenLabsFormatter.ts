@@ -271,7 +271,7 @@ export async function processScriptToParts(
 
     // Step 2: Format each part with AI
     const ai = new GoogleGenAI({ apiKey });
-    const modelName = config.model || 'gemini-2.0-flash';
+    const modelName = config.model || 'gemini-2.5-flash';
     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
     const results: PartFile[] = [];
     let fileCounter = 1;

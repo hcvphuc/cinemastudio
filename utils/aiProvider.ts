@@ -439,22 +439,40 @@ export async function validateApiKey(type: ProviderType, apiKey: string): Promis
             }
             // 502/503 = server issue, not key issue — still validate key format
             if (response.status >= 500) {
-                // Key format check: must start with vai-
                 return apiKey.trim().startsWith('vai-') && apiKey.trim().length > 10;
             }
             return false;
         } else {
-            const provider = createProvider(type, apiKey);
-            const result = await provider.generateText('Say "ok"', {
-                model: 'gemini-2.5-flash',
-                maxOutputTokens: 10,
-            });
-            return result.text.length > 0;
+            // Gemini Direct — validate by listing models (fast, no generation needed)
+            const trimmedKey = apiKey.trim();
+
+            // Format check first
+            if (!trimmedKey.startsWith('AIza') || trimmedKey.length < 30) {
+                return false;
+            }
+
+            // Try listing models — fastest validation
+            try {
+                const response = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models?key=${trimmedKey}&pageSize=1`
+                );
+                if (response.ok) return true;
+                if (response.status === 400 || response.status === 401 || response.status === 403) return false;
+            } catch {
+                // Network error — fall through to format-only validation
+            }
+
+            // If network fails, accept valid format
+            return true;
         }
     } catch {
         // For vertex-key, accept if format looks valid (server might be down)
         if (type === 'vertex-key') {
             return apiKey.trim().startsWith('vai-') && apiKey.trim().length > 10;
+        }
+        // For Gemini, accept if format looks valid
+        if (apiKey.trim().startsWith('AIza') && apiKey.trim().length > 30) {
+            return true;
         }
         return false;
     }

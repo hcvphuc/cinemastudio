@@ -112,28 +112,77 @@ export function splitIntoParts(preprocessedText: string, stripAfterEnd: boolean 
 }
 
 /**
- * Simple (non-AI) formatter
+ * Simple (non-AI) formatter — per-sentence audio tags
  */
 function formatSimple(text: string, partLabel: string): string {
     const lines = text.split('\n');
     const result: string[] = [];
 
+    // Emotion tag pool for variety
+    const emotionTags = [
+        '[cold, deliberate]', '[tense, low voice]', '[calculating]', '[dark, revealing]',
+        '[intense, methodical]', '[analytical]', '[cold, factual]', '[low, intense]',
+        '[building intensity]', '[methodical]', '[revealing]', '[thoughtful]',
+        '[dark, measured]', '[ominous]', '[reflective]'
+    ];
+    const pauseTags = ['[pause]', '[strategic pause]', '[calculated pause]'];
+    const breathTags = ['[inhales]', '[exhales]', '[exhales sharply]'];
+    let emotionIdx = 0;
+
     // Add part header
-    result.push(`[thoughtful, deliberate] ${partLabel}. [inhales]`);
+    result.push(`[thoughtful, deliberate] ${partLabel}. ${breathTags[0]}`);
     result.push('');
 
     for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) { result.push(''); continue; }
 
-        if (trimmed.endsWith('?')) {
-            result.push(`[calculating] ${trimmed}`);
-        } else if (trimmed.length < 30 && !trimmed.includes(',')) {
-            result.push(`[cold, emphasis] ${trimmed} [pause]`);
-        } else if (trimmed.startsWith('"') || trimmed.startsWith('\u201C')) {
-            result.push(`[dramatic] ${trimmed}`);
+        // Split line into sentences by period, question mark, exclamation
+        // Keep the delimiter attached to enable tagging after each
+        const sentences = trimmed.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [trimmed];
+
+        if (sentences.length <= 1) {
+            // Single sentence
+            const tag = emotionTags[emotionIdx % emotionTags.length];
+            emotionIdx++;
+            if (trimmed.endsWith('?')) {
+                result.push(`[calculating] ${trimmed}`);
+            } else if (trimmed.length < 30 && !trimmed.includes(',')) {
+                result.push(`${tag} ${trimmed} [pause]`);
+            } else if (trimmed.startsWith('"') || trimmed.startsWith('\u201C')) {
+                result.push(`[dramatic] ${trimmed}`);
+            } else {
+                result.push(`${tag} ${trimmed}`);
+            }
         } else {
-            result.push(trimmed);
+            // Multiple sentences → add tags between each
+            const parts: string[] = [];
+            for (let i = 0; i < sentences.length; i++) {
+                const s = sentences[i].trim();
+                if (!s) continue;
+
+                if (i === 0) {
+                    // First sentence: add emotion tag before
+                    const tag = emotionTags[emotionIdx % emotionTags.length];
+                    emotionIdx++;
+                    parts.push(`${tag} ${s}`);
+                } else {
+                    // Subsequent: add pause/emotion tag between
+                    const pause = pauseTags[i % pauseTags.length];
+                    if (i % 3 === 0) {
+                        // Every 3rd sentence also add a breath tag
+                        const breath = breathTags[i % breathTags.length];
+                        parts.push(`${pause} ${breath} ${s}`);
+                    } else if (s.endsWith('?')) {
+                        parts.push(`${pause} [calculating] ${s}`);
+                    } else {
+                        const tag = emotionTags[emotionIdx % emotionTags.length];
+                        emotionIdx++;
+                        parts.push(`${pause} ${tag} ${s}`);
+                    }
+                }
+            }
+            result.push(parts.join(' '));
         }
     }
 
@@ -154,26 +203,29 @@ async function formatPartWithAI(
 Take this "${partLabel}" section and add inline audio direction tags for PREMIUM YouTube storytelling narration.
 
 RULES:
-1. Start with the part header spoken with tags: "[thoughtful, investigative] ${partLabel}. [inhales]"
-2. Add [emotion tags] BEFORE each sentence: [cold, deliberate], [tense, low voice], [calculating], [dark, revealing], [intense], [analytical], [philosophical], etc.
-3. Add [pause], [strategic pause], [calculated pause], [long pause] BETWEEN sentences for dramatic rhythm.
-4. Add breath tags: [inhales], [exhales], [exhales sharply] at natural breath points.
-5. Use CAPS for emphasis on KEY words: "the MOST wanted", "does NOT exist"
-6. Break long sentences with periods and [pause] tags.
-7. DO NOT add or remove any content text. Only ADD audio direction tags, pauses, emphasis.
-8. DO NOT add descriptions like "he said". ONLY audio tags in [brackets].
-9. Every paragraph must have at least one emotion tag and strategic pauses.
-10. Output ONLY the enhanced script text. No markdown code blocks. No explanations.
+1. Start with the part header: "[thoughtful, investigative] ${partLabel}. [inhales]"
+2. CRITICAL: Add audio tags AFTER EVERY period/sentence. EVERY sentence must have a tag before it or after the previous period:
+   - [emotion tag] before sentence: [cold, deliberate], [tense, low voice], [calculating, building], [dark, revealing], [intense], [analytical], [philosophical], etc.
+   - [pause], [strategic pause], [calculated pause] AFTER each period, before next sentence
+   - [inhales], [exhales], [exhales sharply] as breath marks every 2-3 sentences
+3. Use CAPS for emphasis on KEY words: "the MOST wanted", "does NOT exist", "FORTY-TWO countries"
+4. Break long sentences into shorter fragments with periods and [pause] tags for natural TTS pacing.
+5. DO NOT add or remove any content text. Only ADD audio direction tags.
+6. DO NOT add stage directions or descriptions. ONLY [bracketed] audio tags.
+7. Output ONLY the enhanced script text. No markdown. No explanations.
 
-EXAMPLE:
-[thoughtful, deliberate] Part A. The Hook. [inhales]
+EXAMPLE showing per-sentence detail:
+[thoughtful, deliberate] Part A. [pause] The Hook. [inhales]
 
-[cold, deliberate] Are you WATCHING? [strategic pause] Because what happens next. [pause] I PROMISE you. will not believe your eyes.
+[cold, deliberate] Are you WATCHING? [strategic pause] Because what happens next. [pause] I PROMISE you. [calculated pause] will NOT believe your eyes. [exhales]
 
-[tense, low voice] 6:47 PM. [pause] Riverside Glen Community Center. [inhales]
+[tense, low voice] 6:47 PM. [pause] Riverside Glen Community Center. [inhales] A man walks in. [strategic pause] [dark, revealing] Blue surgical scrubs. [pause] Wrinkled. [calculated pause] Stains still fresh. [pause] He hasn't slept in thirty-six HOURS. [exhales sharply]
+
+[cold, analytical] In three decades of organized crime. [pause] no ONE has evaded this level of surveillance. [strategic pause] [calculating] How. [pause] does a man with NO digital footprint. [calculated pause] become the MOST wanted drug trafficker. [pause, intense] in the Western Hemisphere? [inhales]
 
 INPUT:
 ${content}`;
+
 
     try {
         console.log(`[ElevenLabs AI] Processing: ${partLabel} (${content.length} chars)...`);

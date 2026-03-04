@@ -143,7 +143,7 @@ export async function checkImperialHealth(): Promise<boolean> {
     }
 
     try {
-        const response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=v1/models`, {
+        const response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=models`, {
             headers: { 'Authorization': `Bearer ${apiKey}` },
             signal: AbortSignal.timeout(5000),
         });
@@ -271,7 +271,7 @@ export async function callImperialText(
     }
 
     try {
-        const response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=v1/chat/completions`, {
+        const response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=chat/completions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -346,7 +346,7 @@ export async function callImperialImage(
             response_format: 'b64_json',
         };
 
-        response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=v1/images/generations`, {
+        response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=images/generations`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -363,7 +363,7 @@ export async function callImperialImage(
             max_tokens: 4096,
         };
 
-        response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=v1/chat/completions`, {
+        response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=chat/completions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -428,7 +428,7 @@ export async function callImperialImageEdit(
         max_tokens: 4096,
     };
 
-    const response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=v1/chat/completions`, {
+    const response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=chat/completions`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -478,7 +478,7 @@ export async function callImperialVision(
         body.response_format = { type: 'json_object' };
     }
 
-    const response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=v1/chat/completions`, {
+    const response = await fetch(`${IMPERIAL_CONFIG.baseUrl}?path=chat/completions`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

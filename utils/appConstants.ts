@@ -141,10 +141,12 @@ export const IMAGE_MODELS = [
     { value: '__header_edit__', label: '─── 🖌️ EDIT MODELS ───', provider: 'header', description: 'Supports editing, references, Face ID', isHeader: true },
 
     // Gemini Direct
+    { value: 'gemini-3.1-flash-image-preview', label: '🔵 Gemini 3.1 Flash Image', provider: 'gemini', description: 'Gemini Direct - Latest image gen model', supportsEdit: true, supportsSubject: true, group: 'edit' },
     { value: 'gemini-3-pro-image-preview', label: '🔵 Nano Banana Pro', provider: 'gemini', description: 'Gemini Direct - Via Google AI Studio API', supportsEdit: true, supportsSubject: true, group: 'edit' },
-    { value: 'gemini-3.1-flash-image-1k', label: '🔵 Gemini 3.1 Flash Image 1K', provider: 'gemini', description: '1408×768 • $0.40/req', supportsEdit: true, supportsSubject: true, group: 'edit' },
-    { value: 'gemini-3.1-flash-image-2k', label: '🔵 Gemini 3.1 Flash Image 2K', provider: 'gemini', description: '2816×1536 • $0.55/req', supportsEdit: true, supportsSubject: true, group: 'edit' },
-    { value: 'gemini-3.1-flash-image-4k', label: '🔵 Gemini 3.1 Flash Image 4K', provider: 'gemini', description: '5632×3072 • $0.70/req', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gemini-2.5-flash-image', label: '🔵 Gemini 2.5 Flash Image', provider: 'gemini', description: 'Gemini Direct - Fast image gen', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gemini-3.1-flash-image-1k', label: '🔵 Gemini 3.1 Flash Image 1K', provider: 'gemini', description: '1408×768 • $0.40/req (Vertex Key)', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gemini-3.1-flash-image-2k', label: '🔵 Gemini 3.1 Flash Image 2K', provider: 'gemini', description: '2816×1536 • $0.55/req (Vertex Key)', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gemini-3.1-flash-image-4k', label: '🔵 Gemini 3.1 Flash Image 4K', provider: 'gemini', description: '5632×3072 • $0.70/req (Vertex Key)', supportsEdit: true, supportsSubject: true, group: 'edit' },
 
     // Google Imagen via Gommo (EDIT)
     { value: 'google_image_gen_banana_pro', label: '🟡 Nano Banana Pro', provider: 'gommo', description: 'Google - 1k/2k/4k - 300 credits', supportsEdit: true, supportsSubject: true, group: 'edit' },

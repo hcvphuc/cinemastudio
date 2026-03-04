@@ -357,12 +357,23 @@ export function useImageGeneration(
             else if (model.includes('flash-image-2k')) effectiveImageSize = '2K';
             else if (model.includes('flash-image-1k')) effectiveImageSize = '1K';
 
-            console.log(`[ImageGen] Generating with model: ${model}, resolution: ${effectiveImageSize}, aspectRatio: ${aspectRatio}, parts: ${fullParts.length}`);
+            // Map vertex-key model IDs to actual Google Gemini model IDs
+            // vertex-key uses suffixed names (1k/2k/4k) but Google has a single model
+            const GEMINI_MODEL_MAP: Record<string, string> = {
+                'gemini-3.1-flash-image-1k': 'gemini-3.1-flash-image-preview',
+                'gemini-3.1-flash-image-2k': 'gemini-3.1-flash-image-preview',
+                'gemini-3.1-flash-image-4k': 'gemini-3.1-flash-image-preview',
+                'gemini-3-pro-image': 'gemini-3-pro-image-preview',
+                'gemini-2.5-flash-image': 'gemini-2.5-flash-image',
+            };
+            const effectiveModel = GEMINI_MODEL_MAP[model] || model;
+
+            console.log(`[ImageGen] Generating with model: ${model} → ${effectiveModel}, resolution: ${effectiveImageSize}, aspectRatio: ${aspectRatio}, parts: ${fullParts.length}`);
 
             // Wrap API call with retry for transient errors (500, 503)
             const response = await withRetry(async () => {
                 return await ai.models.generateContent({
-                    model: model,
+                    model: effectiveModel,
                     contents: [{ parts: fullParts }],
                     config: {
                         responseModalities: ["IMAGE"], // Enforce Image output

@@ -8,6 +8,7 @@ import {
 } from '../constants/presets';
 import { DIRECTOR_PRESETS, DirectorCategory } from '../constants/directors';
 import { getPresetById } from '../utils/scriptPresets';
+import { callImperialImage, callImperialImageEdit, getImageFallbackChain, isImperialUltraEnabled, getImperialApiKey } from '../utils/imperialUltraClient';
 import { uploadImageToSupabase, syncUserStatsToCloud } from '../utils/storageUtils';
 import { safeGetImageData, callGeminiVisionReasoning, preWarmImageCache, fixMimeType, base64ToBlobUrl } from '../utils/geminiUtils';
 import { GommoAI, urlToBase64 } from '../utils/gommoAI';
@@ -32,9 +33,9 @@ const cleanPromptForImageGen = (prompt: string): string => {
 };
 
 // Helper: Determine which provider to use based on model ID
-const getProviderFromModel = (modelId: string): 'gemini' | 'gommo' => {
+const getProviderFromModel = (modelId: string): 'gemini' | 'gommo' | 'imperial' => {
     const model = IMAGE_MODELS.find(m => m.value === modelId);
-    return (model?.provider as 'gemini' | 'gommo') || 'gemini';
+    return (model?.provider as 'gemini' | 'gommo' | 'imperial') || 'gemini';
 };
 
 // Helper: Delay function for retries
@@ -328,6 +329,59 @@ export function useImageGeneration(
                 token: gommoCredentials?.accessToken ? '(set)' : '(empty)'
             });
             throw new Error('Gommo credentials chưa được cấu hình. Vào Profile → Gommo AI để nhập Domain và Access Token.');
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // IMPERIAL PATH: Vertex Key proxy (vertex-key.com)
+        // ═══════════════════════════════════════════════════════════════
+        if (provider === 'imperial') {
+            console.log('[ImageGen] 🟣 Using IMPERIAL (Vertex Key) provider');
+            const imperialKey = getImperialApiKey();
+            if (!imperialKey) {
+                throw new Error('Vertex Key chưa được cấu hình. Vào Settings → nhập Vertex Key (vai-xxx).');
+            }
+
+            // Try with fallback chain
+            const fallbackChain = getImageFallbackChain(model);
+            const modelsToTry = [model, ...fallbackChain];
+
+            let lastError: Error | null = null;
+            for (const currentModel of modelsToTry) {
+                try {
+                    console.log(`[ImageGen] 🟣 Trying Imperial model: ${currentModel}`);
+                    const hasInputImages = parts.length > 0;
+
+                    let imageUrl: string;
+                    if (hasInputImages) {
+                        // Image edit path — extract base64 from first part
+                        const firstPart = parts[0];
+                        const base64Data = firstPart.inlineData?.data || '';
+                        const mime = firstPart.inlineData?.mimeType || 'image/png';
+                        imageUrl = await callImperialImageEdit(
+                            base64Data, mime, prompt, undefined,
+                            { model: currentModel, apiKey: imperialKey }
+                        );
+                    } else {
+                        // Text-to-image path
+                        imageUrl = await callImperialImage(prompt, {
+                            model: currentModel,
+                            aspectRatio: aspectRatio,
+                            apiKey: imperialKey,
+                        });
+                    }
+
+                    return { imageUrl };
+                } catch (error: any) {
+                    console.warn(`[ImageGen] 🟣 Imperial model ${currentModel} failed:`, error.message);
+                    lastError = error;
+                    // Continue to next model in fallback chain
+                    if (error.message.includes('429') || error.message.includes('503') || error.message.includes('502')) {
+                        continue;
+                    }
+                    break; // Non-retryable error
+                }
+            }
+            throw lastError || new Error('Imperial image generation failed - all models exhausted');
         }
 
         // ═══════════════════════════════════════════════════════════════

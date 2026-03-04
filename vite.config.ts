@@ -8,6 +8,20 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: '0.0.0.0',
+      proxy: {
+        // Proxy vertex-key.com requests to avoid CORS in local dev
+        '/api/proxy/imperial': {
+          target: 'https://vertex-key.com',
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace('/api/proxy/imperial', '/api/v1'),
+          timeout: 300000, // 5 min for image gen/edit
+          configure: (proxy: any) => {
+            proxy.on('proxyReq', (proxyReq: any) => {
+              proxyReq.socket?.setTimeout(300000);
+            });
+          }
+        },
+      },
     },
     plugins: [react()],
     define: {

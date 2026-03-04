@@ -144,6 +144,12 @@ export const IMAGE_MODELS = [
     { value: 'gemini-3.1-flash-image-preview', label: '🔵 Gemini 3.1 Flash Image', provider: 'gemini', description: 'Gemini Direct - Latest image gen model', supportsEdit: true, supportsSubject: true, group: 'edit' },
     { value: 'gemini-3-pro-image-preview', label: '🔵 Nano Banana Pro', provider: 'gemini', description: 'Gemini Direct - Via Google AI Studio API', supportsEdit: true, supportsSubject: true, group: 'edit' },
     { value: 'gemini-2.5-flash-image', label: '🔵 Gemini 2.5 Flash Image', provider: 'gemini', description: 'Gemini Direct - Fast image gen', supportsEdit: true, supportsSubject: true, group: 'edit' },
+
+    // Vertex Key (Imperial) — via proxy, supports auto-failover
+    { value: 'gemini-image-2k', label: '🟣 Gemini Image 2K (Vertex)', provider: 'imperial', description: 'Vertex Key - 2K resolution, auto-failover', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gemini-image-4k', label: '🟣 Gemini Image 4K (Vertex)', provider: 'imperial', description: 'Vertex Key - 4K best quality', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gemini-image-1k', label: '🟣 Gemini Image 1K (Vertex)', provider: 'imperial', description: 'Vertex Key - 1K fast, best for edit', supportsEdit: true, supportsSubject: true, group: 'edit' },
+    { value: 'gem/gemini-3.1-flash-image-2k', label: '🟣 Flash Image 2K (Legacy)', provider: 'imperial', description: 'Vertex Key - Legacy prefix model', supportsEdit: true, supportsSubject: true, group: 'edit' },
     { value: 'gemini-3.1-flash-image-1k', label: '🔵 Gemini 3.1 Flash Image 1K', provider: 'gemini', description: '1408×768 • $0.40/req (Vertex Key)', supportsEdit: true, supportsSubject: true, group: 'edit' },
     { value: 'gemini-3.1-flash-image-2k', label: '🔵 Gemini 3.1 Flash Image 2K', provider: 'gemini', description: '2816×1536 • $0.55/req (Vertex Key)', supportsEdit: true, supportsSubject: true, group: 'edit' },
     { value: 'gemini-3.1-flash-image-4k', label: '🔵 Gemini 3.1 Flash Image 4K', provider: 'gemini', description: '5632×3072 • $0.70/req (Vertex Key)', supportsEdit: true, supportsSubject: true, group: 'edit' },

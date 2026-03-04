@@ -21,6 +21,13 @@ export default defineConfig(({ mode }) => {
             });
           }
         },
+        // Proxy Gemini API requests to avoid browser API key restrictions
+        '/api/proxy/gemini': {
+          target: 'https://generativelanguage.googleapis.com',
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace('/api/proxy/gemini', ''),
+          timeout: 300000,
+        },
       },
     },
     plugins: [react()],

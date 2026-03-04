@@ -109,9 +109,34 @@ export function getActiveApiKey(): string {
 class GeminiProvider implements AIProvider {
     type: ProviderType = 'gemini';
     private ai: GoogleGenAI;
+    private apiKey: string;
+    private proxyBaseUrl = '/api/proxy/gemini/handler';
 
     constructor(apiKey: string) {
-        this.ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+        this.apiKey = apiKey.trim();
+        this.ai = new GoogleGenAI({ apiKey: this.apiKey });
+    }
+
+    /**
+     * Call Gemini via server-side proxy (avoids browser API key restrictions)
+     */
+    private async callViaProxy(model: string, body: any): Promise<any> {
+        const path = `v1beta/models/${model}:generateContent`;
+        const response = await fetch(`${this.proxyBaseUrl}?path=${encodeURIComponent(path)}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Goog-Api-Key': this.apiKey,
+            },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Gemini Proxy ${response.status}: ${errorText.substring(0, 200)}`);
+        }
+
+        return await response.json();
     }
 
     async generateText(
@@ -128,26 +153,46 @@ class GeminiProvider implements AIProvider {
             contents = prompt;
         }
 
-        const genConfig: any = {};
-        if (config?.temperature !== undefined) genConfig.temperature = config.temperature;
-        if (config?.maxOutputTokens) genConfig.maxOutputTokens = config.maxOutputTokens;
-        if (config?.topP !== undefined) genConfig.topP = config.topP;
-        if (config?.topK !== undefined) genConfig.topK = config.topK;
-        if (config?.responseMimeType) genConfig.responseMimeType = config.responseMimeType;
-        if (config?.responseSchema) genConfig.responseSchema = config.responseSchema;
-        if (config?.thinkingConfig) genConfig.thinkingConfig = config.thinkingConfig;
+        const generationConfig: any = {};
+        if (config?.temperature !== undefined) generationConfig.temperature = config.temperature;
+        if (config?.maxOutputTokens) generationConfig.maxOutputTokens = config.maxOutputTokens;
+        if (config?.topP !== undefined) generationConfig.topP = config.topP;
+        if (config?.topK !== undefined) generationConfig.topK = config.topK;
+        if (config?.responseMimeType) generationConfig.responseMimeType = config.responseMimeType;
+        if (config?.responseSchema) generationConfig.responseSchema = config.responseSchema;
+        if (config?.thinkingConfig) generationConfig.thinkingConfig = config.thinkingConfig;
 
-        const response = await this.ai.models.generateContent({
-            model,
-            contents,
-            config: Object.keys(genConfig).length > 0 ? genConfig : undefined,
-            ...(config?.systemInstruction ? { systemInstruction: config.systemInstruction } : {}),
-        });
+        // Try proxy first (avoids browser API key restrictions)
+        try {
+            const body: any = { contents };
+            if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
+            if (config?.systemInstruction) {
+                body.systemInstruction = { parts: [{ text: config.systemInstruction }] };
+            }
 
-        return {
-            text: response.text || '',
-            raw: response,
-        };
+            const data = await this.callViaProxy(model, body);
+            const text = data.candidates?.[0]?.content?.parts
+                ?.map((p: any) => p.text || '')
+                .join('') || '';
+
+            return { text, raw: data };
+        } catch (proxyError: any) {
+            console.warn(`[GeminiProvider] Proxy failed (${proxyError.message}), trying SDK direct...`);
+
+            // Fallback to SDK direct (works if API key allows browser access)
+            const genConfig: any = { ...generationConfig };
+            const response = await this.ai.models.generateContent({
+                model,
+                contents,
+                config: Object.keys(genConfig).length > 0 ? genConfig : undefined,
+                ...(config?.systemInstruction ? { systemInstruction: config.systemInstruction } : {}),
+            });
+
+            return {
+                text: response.text || '',
+                raw: response,
+            };
+        }
     }
 
     async generateTextWithImages(
@@ -162,22 +207,39 @@ class GeminiProvider implements AIProvider {
             ...imageDataParts,
         ];
 
-        const genConfig: any = {};
-        if (config?.temperature !== undefined) genConfig.temperature = config.temperature;
-        if (config?.maxOutputTokens) genConfig.maxOutputTokens = config.maxOutputTokens;
-        if (config?.responseMimeType) genConfig.responseMimeType = config.responseMimeType;
-        if (config?.responseSchema) genConfig.responseSchema = config.responseSchema;
+        const generationConfig: any = {};
+        if (config?.temperature !== undefined) generationConfig.temperature = config.temperature;
+        if (config?.maxOutputTokens) generationConfig.maxOutputTokens = config.maxOutputTokens;
+        if (config?.responseMimeType) generationConfig.responseMimeType = config.responseMimeType;
+        if (config?.responseSchema) generationConfig.responseSchema = config.responseSchema;
 
-        const response = await this.ai.models.generateContent({
-            model,
-            contents: [{ role: 'user', parts }],
-            config: Object.keys(genConfig).length > 0 ? genConfig : undefined,
-        });
+        // Try proxy first
+        try {
+            const body: any = {
+                contents: [{ role: 'user', parts }],
+            };
+            if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
-        return {
-            text: response.text || '',
-            raw: response,
-        };
+            const data = await this.callViaProxy(model, body);
+            const text = data.candidates?.[0]?.content?.parts
+                ?.map((p: any) => p.text || '')
+                .join('') || '';
+
+            return { text, raw: data };
+        } catch (proxyError: any) {
+            console.warn(`[GeminiProvider] Proxy failed for vision (${proxyError.message}), trying SDK...`);
+
+            const response = await this.ai.models.generateContent({
+                model,
+                contents: [{ role: 'user', parts }],
+                config: Object.keys(generationConfig).length > 0 ? generationConfig : undefined,
+            });
+
+            return {
+                text: response.text || '',
+                raw: response,
+            };
+        }
     }
 
     getRawClient(): GoogleGenAI {

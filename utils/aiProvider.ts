@@ -210,7 +210,8 @@ function mapModelToVertexKey(geminiModel: string): string {
 class VertexKeyProvider implements AIProvider {
     type: ProviderType = 'vertex-key';
     private apiKey: string;
-    private baseURL = 'https://vertex-key.com/api/v1';
+    // Route through Vercel serverless proxy to avoid CORS
+    private baseURL = '/api/proxy/imperial/handler';
 
     constructor(apiKey: string) {
         this.apiKey = apiKey.trim();
@@ -252,7 +253,7 @@ class VertexKeyProvider implements AIProvider {
             body.response_format = { type: 'json_object' };
         }
 
-        const response = await fetch(`${this.baseURL}/chat/completions`, {
+        const response = await fetch(`${this.baseURL}?path=chat/completions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -297,7 +298,7 @@ class VertexKeyProvider implements AIProvider {
             max_tokens: config?.maxOutputTokens || 8192,
         };
 
-        const response = await fetch(`${this.baseURL}/chat/completions`, {
+        const response = await fetch(`${this.baseURL}?path=chat/completions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -428,8 +429,8 @@ export function clearProviderCache(): void {
 export async function validateApiKey(type: ProviderType, apiKey: string): Promise<boolean> {
     try {
         if (type === 'vertex-key') {
-            // Use /models endpoint — lightweight and reliable
-            const response = await fetch('https://vertex-key.com/api/v1/models', {
+            // Use /models endpoint via proxy — lightweight and reliable
+            const response = await fetch('/api/proxy/imperial/handler?path=models', {
                 headers: { 'Authorization': `Bearer ${apiKey.trim()}` },
             });
             if (response.status === 401 || response.status === 403) return false;

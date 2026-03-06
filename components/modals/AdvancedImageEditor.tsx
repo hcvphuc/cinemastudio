@@ -5,6 +5,7 @@ import MaskCanvas, { MaskCanvasHandle } from '../MaskCanvas';
 import { upscaleImage, expandImage, editImageWithMask, analyzeImage, compositeImages, applyStyleTransfer, generateImageFromImage, tryOnOutfit, GeneratedImage } from '../../utils/geminiImageEdit';
 import { IMAGE_MODELS, ASPECT_RATIOS } from '../../constants/presets';
 import { fixMimeType } from '../../utils/geminiUtils';
+import { resolveImage, isIdbKey } from '../../utils/imageCache';
 
 import { Character, Product } from '../../types';
 
@@ -100,6 +101,12 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
     // Helper: Convert URL to base64 (handles Supabase URLs from saved projects)
     const ensureBase64Image = async (imageStr: string): Promise<string> => {
         if (imageStr.startsWith('data:')) return imageStr;
+
+        if (isIdbKey(imageStr)) {
+            const resolved = await resolveImage(imageStr);
+            if (resolved) return resolved;
+            throw new Error(`Failed to resolve IndexedDB image: ${imageStr}`);
+        }
 
         try {
             // Direct fetch (Supabase has proper CORS headers)

@@ -352,7 +352,7 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
 
             const promptStr = "Create a fashion product collage on a brown corkboard based on this outfit. Separate items like jacket, shirt, pants, shoes, and accessories clearly with labels like in a studio product shoot.";
             // Use the new reference-to-image utility
-            const result = await generateImageFromImage(apiKey, data, mimeType, promptStr, imageAspectRatio, currentResolution);
+            const result = await generateImageFromImage(apiKey, data, mimeType, promptStr, imageAspectRatio, currentResolution, editModel);
 
             setCorkboardImage(`data:${result.mimeType};base64,${result.base64}`);
         } catch (err: any) {
@@ -382,7 +382,8 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
                 corkboardImage,
                 canvasMask,
                 imageAspectRatio,
-                currentResolution
+                currentResolution,
+                editModel
             );
 
             const newUrl = `data:${tryOnResult.mimeType};base64,${tryOnResult.base64}`;
@@ -425,7 +426,7 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
                 // Use Gemini native text-to-image
                 const ai = new GoogleGenAI({ apiKey });
                 const response = await ai.models.generateContent({
-                    model: 'gemini-3-pro-image-preview',
+                    model: editModel,
                     contents: prompt,
                     config: {
                         responseModalities: ['TEXT', 'IMAGE'] as any,
@@ -463,7 +464,7 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
                 // For multi-image, we use the first image for compositing and include others in prompt context
                 // Gemini can handle multiple images in a single call
                 if (refGenImages.length === 1) {
-                    const result = await compositeImages(apiKey, baseGen, refGenImages[0], prompt, imageAspectRatio, currentResolution);
+                    const result = await compositeImages(apiKey, baseGen, refGenImages[0], prompt, imageAspectRatio, currentResolution, editModel);
                     if (result.base64) {
                         const newImage = `data:${result.mimeType};base64,${result.base64}`;
                         setCurrentImage(newImage);
@@ -479,7 +480,7 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
                     ];
 
                     const response = await ai.models.generateContent({
-                        model: 'gemini-3-pro-image-preview',
+                        model: editModel,
                         contents: { parts },
                         config: {
                             responseModalities: ['IMAGE'],
@@ -505,7 +506,7 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
                 const baseGen = await toGenImg(baseBlob);
                 const styleGen = await toGenImg(styleBlob);
 
-                const result = await applyStyleTransfer(apiKey, baseGen, styleGen, prompt, imageAspectRatio, currentResolution);
+                const result = await applyStyleTransfer(apiKey, baseGen, styleGen, prompt, imageAspectRatio, currentResolution, editModel);
                 if (result.base64) {
                     const newImage = `data:${result.mimeType};base64,${result.base64}`;
                     setCurrentImage(newImage);
@@ -527,12 +528,12 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
                 setLoadingMessage('Editing with Mask...');
                 const maskBase64 = await canvasRef.current?.getMaskDataURL();
                 if (!maskBase64) throw new Error("Failed to generate mask");
-                result = await editImageWithMask(apiKey, data, mimeType, maskBase64, prompt, imageAspectRatio, currentResolution);
+                result = await editImageWithMask(apiKey, data, mimeType, maskBase64, prompt, imageAspectRatio, currentResolution, editModel);
                 canvasRef.current?.clear();
             } else {
                 // No mask - use text-to-image regeneration
                 setLoadingMessage('Regenerating with prompt...');
-                result = await generateImageFromImage(apiKey, data, mimeType, prompt, imageAspectRatio, currentResolution);
+                result = await generateImageFromImage(apiKey, data, mimeType, prompt, imageAspectRatio, currentResolution, editModel);
             }
 
             if (result.base64) {
@@ -569,7 +570,7 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
         try {
             const [header, data] = currentImage.split(',');
             const mimeType = header.match(/:(.*?);/)?.[1] || 'image/png';
-            const result = await upscaleImage(apiKey, data, mimeType, imageAspectRatio, upscaleLevel);
+            const result = await upscaleImage(apiKey, data, mimeType, imageAspectRatio, upscaleLevel, editModel);
             if (result.base64) {
                 const newImage = `data:${result.mimeType};base64,${result.base64}`;
                 setCurrentImage(newImage);
@@ -592,7 +593,7 @@ export const AdvancedImageEditor: React.FC<AdvancedImageEditorProps> = ({
         try {
             const [header, data] = currentImage.split(',');
             const mimeType = header.match(/:(.*?);/)?.[1] || 'image/png';
-            const result = await expandImage(apiKey, data, mimeType, direction, imageAspectRatio, currentResolution);
+            const result = await expandImage(apiKey, data, mimeType, direction, imageAspectRatio, currentResolution, editModel);
             if (result.base64) {
                 const newImage = `data:${result.mimeType};base64,${result.base64}`;
                 setCurrentImage(newImage);

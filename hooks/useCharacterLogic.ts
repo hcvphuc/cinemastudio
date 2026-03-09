@@ -1,10 +1,9 @@
 import { useCallback } from 'react';
-import { GoogleGenAI } from "@google/genai";
 import { ProjectState, Character } from '../types';
 import { generateId } from '../utils/helpers';
 import { GLOBAL_STYLES, CHARACTER_STYLES } from '../constants/presets';
 import { getCharacterStyleById } from '../constants/characterStyles';
-import { callGeminiAPI, callCharacterImageAPI } from '../utils/geminiUtils';
+import { callGeminiAPI, callCharacterImageAPI, callGeminiVisionReasoning } from '../utils/geminiUtils';
 import { uploadImageToSupabase, syncUserStatsToCloud } from '../utils/storageUtils';
 import { normalizePromptAsync, needsNormalization, containsVietnamese, formatNormalizationLog } from '../utils/promptNormalizer';
 import { recordPrompt, approvePrompt, searchSimilarPrompts } from '../utils/dopLearning';
@@ -39,6 +38,7 @@ export function useCharacterLogic(
             bodyImage: null,
             sideImage: null,
             backImage: null,
+            characterSheet: null,
             props: [
                 { id: generateId(), name: '', image: null },
                 { id: generateId(), name: '', image: null },
@@ -83,14 +83,7 @@ export function useCharacterLogic(
         const apiKey = typeof rawApiKey === 'string' ? rawApiKey.trim() : rawApiKey;
         updateCharacter(id, { isAnalyzing: true, generationStartTime: Date.now() });
 
-        if (!apiKey) {
-            updateCharacter(id, { isAnalyzing: false });
-            setApiKeyModalOpen(true);
-            return;
-        }
-
         try {
-            const ai = new GoogleGenAI({ apiKey });
             let data: string;
             let mimeType: string = 'image/jpeg';
             let finalMasterUrl = image;
@@ -108,7 +101,6 @@ export function useCharacterLogic(
                     }
                 }
             } else if (image.startsWith('blob:')) {
-                // Handle Blob URLs (from base64ToBlobUrl memory optimization)
                 const blobRes = await fetch(image);
                 const blob = await blobRes.blob();
                 mimeType = blob.type || 'image/jpeg';
@@ -120,7 +112,6 @@ export function useCharacterLogic(
                 });
                 finalMasterUrl = image;
             } else if (image.startsWith('http')) {
-                // Handle URL images
                 const imgRes = await fetch(image);
                 if (!imgRes.ok) throw new Error(`Fetch failed`);
                 const blob = await imgRes.blob();
@@ -136,25 +127,29 @@ export function useCharacterLogic(
                 throw new Error("Invalid image format");
             }
 
-            const analyzePrompt = `Analyze this character's main features. Return JSON: {"name": "Suggest a concise name", "description": "Short Vietnamese description (2-3 sentences) of key physical traits, clothing, and overall vibe. Focus on what makes them unique."}`;
-            const analysisRes = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: { parts: [{ inlineData: { data, mimeType } }, { text: analyzePrompt }] },
-                config: {
-                    responseMimeType: "application/json"
-                }
-            });
+            const analyzePrompt = `You are a character analysis AI. Return ONLY a JSON object, no markdown. Analyze this character: {"name": "Short English name", "description": "Vietnamese description of key physical traits, clothing, and overall vibe (2-3 sentences)"}. RESPOND WITH JSON ONLY.`;
+
+            // Smart routing: Imperial Vertex → Gemini Direct (no hardcoded GoogleGenAI)
+            console.log('[Analyze] 🔍 Using smart vision routing (Imperial → Gemini)');
+            const analysisText = await callGeminiVisionReasoning(apiKey || '', analyzePrompt, [{ data, mimeType }]);
 
             let json = { name: "", description: "" };
             try {
-                const text = (analysisRes as any).text();
-                json = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+                json = JSON.parse(analysisText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim());
             } catch (e) {
                 try {
-                    const text = (analysisRes as any).text || "";
-                    json = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+                    const jsonMatch = analysisText.match(/\{[\s\S]*?"name"[\s\S]*?"description"[\s\S]*?\}/);
+                    if (jsonMatch) {
+                        json = JSON.parse(jsonMatch[0]);
+                    } else {
+                        const nameMatch = analysisText.match(/"name"\s*:\s*"([^"]+)"/);
+                        const descMatch = analysisText.match(/"description"\s*:\s*"([^"]+)"/);
+                        if (nameMatch || descMatch) {
+                            json = { name: nameMatch?.[1] || "", description: descMatch?.[1] || "" };
+                        }
+                    }
                 } catch (e2) {
-                    console.error("JSON parse error", e2);
+                    console.error("[Analyze] ❌ JSON extraction failed", e2);
                 }
             }
 
@@ -169,169 +164,128 @@ export function useCharacterLogic(
             console.error("Analysis Failed", error);
             updateCharacter(id, { isAnalyzing: false });
         }
-    }, [userApiKey, updateCharacter, setApiKeyModalOpen, userId]);
+    }, [userApiKey, updateCharacter, userId]);
 
     // Combined function: Analyze + Generate Face ID & Body in one step
     const analyzeAndGenerateSheets = useCallback(async (id: string, image: string, options?: { skipMetadata?: boolean }) => {
         const rawApiKey = userApiKey || (process.env as any).API_KEY;
         const apiKey = typeof rawApiKey === 'string' ? rawApiKey.trim() : rawApiKey;
 
-        if (!apiKey) {
-            setApiKeyModalOpen(true);
-            return;
-        }
-
         updateCharacter(id, { isAnalyzing: true, generationStartTime: Date.now() });
 
         try {
-            const ai = new GoogleGenAI({ apiKey });
             let data: string;
             let mimeType: string = 'image/jpeg';
             let finalMasterUrl = image;
 
-            console.log('[Lora Gen] Starting image processing...', {
+            console.log('[Lora Gen] Starting image processing with smart routing...', {
                 isBase64: image.startsWith('data:'),
-                isUrl: image.startsWith('http'),
-                imagePreview: image.substring(0, 50) + '...'
+                isUrl: image.startsWith('http')
             });
 
             // Convert image to base64 if needed
             if (image.startsWith('data:')) {
-                console.log('[Lora Gen] Processing base64 image...');
                 const [header, base64Data] = image.split(',');
                 data = base64Data;
                 mimeType = header.match(/:(.*?);/)?.[1] || 'image/jpeg';
-                console.log('[Lora Gen] ✅ Base64 extracted:', { mimeType, dataLength: data.length });
 
                 if (userId) {
                     try {
                         finalMasterUrl = await uploadImageToSupabase(image, 'project-assets', `${userId}/characters/${id}_master_${Date.now()}.jpg`);
-                        console.log('[Lora Gen] ✅ Uploaded to Supabase:', finalMasterUrl);
                     } catch (e) {
                         console.error("[Lora Gen] Cloud upload failed for master image", e);
                     }
                 }
             } else if (image.startsWith('blob:')) {
-                // Handle Blob URLs (from base64ToBlobUrl memory optimization)
-                console.log('[Lora Gen] Processing blob URL image...');
                 const blobRes = await fetch(image);
                 const blob = await blobRes.blob();
                 mimeType = blob.type || 'image/jpeg';
                 data = await new Promise<string>((resolve, reject) => {
                     const reader = new FileReader();
-                    reader.onloadend = () => {
-                        const result = (reader.result as string).split(',')[1];
-                        console.log('[Lora Gen] ✅ Blob converted to base64:', result.length, 'chars');
-                        resolve(result);
-                    };
+                    reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
                     reader.onerror = reject;
                     reader.readAsDataURL(blob);
                 });
                 finalMasterUrl = image;
             } else if (image.startsWith('http')) {
-                console.log('[Lora Gen] Fetching URL image...', image);
                 try {
                     const imgRes = await fetch(image, { mode: 'cors' });
-                    if (!imgRes.ok) {
-                        console.error('[Lora Gen] ❌ Fetch failed:', imgRes.status, imgRes.statusText);
-                        throw new Error(`Fetch failed: ${imgRes.status}`);
-                    }
+                    if (!imgRes.ok) throw new Error(`Fetch failed: ${imgRes.status}`);
                     const blob = await imgRes.blob();
                     mimeType = blob.type || 'image/jpeg';
-                    console.log('[Lora Gen] ✅ Fetched blob:', { size: blob.size, type: mimeType });
-
                     data = await new Promise<string>((resolve, reject) => {
                         const reader = new FileReader();
-                        reader.onloadend = () => {
-                            const result = (reader.result as string).split(',')[1];
-                            console.log('[Lora Gen] ✅ Converted to base64:', result.length, 'chars');
-                            resolve(result);
-                        };
-                        reader.onerror = (e) => {
-                            console.error('[Lora Gen] ❌ FileReader error:', e);
-                            reject(e);
-                        };
+                        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+                        reader.onerror = reject;
                         reader.readAsDataURL(blob);
                     });
                     finalMasterUrl = image;
                 } catch (fetchError: any) {
-                    console.error('[Lora Gen] ❌ Failed to fetch URL image:', fetchError.message);
-                    // If CORS fails, try to use the URL directly in the API call
-                    throw new Error(`Cannot fetch image from URL. CORS error: ${fetchError.message}`);
+                    throw new Error(`Cannot fetch image from URL: ${fetchError.message}`);
                 }
             } else {
-                console.error('[Lora Gen] ❌ Invalid image format:', image.substring(0, 30));
                 throw new Error("Invalid image format");
             }
 
-            // Step 1: Analyze the character AND detect art style with HIGH PRECISION
-            const analyzePrompt = `Analyze this character image carefully and provide accurate details.
+            // Step 1: Analyze the character with Smart Vision (Imperial → Gemini)
+            const analyzePrompt = `You are a character analysis AI. Analyze this character image and return ONLY a JSON object. No markdown, no explanation, no code blocks — PURE JSON ONLY.
 
-**NAME RULES:**
-- Suggest a SHORT, MEMORABLE English name (1-2 words max)
-- Examples: "Leo", "Storm", "Captain Kai", "Luna", "The Hunter"
-- If the character looks Asian, you can use short Asian-Western fusion names like "Rei", "Jin", "Yuki"
-
-**DESCRIPTION RULES:**
-- Write in Vietnamese
-- Be SPECIFIC about physical traits: face shape, skin tone, hair color/style, eye shape
-- Describe clothing/costume in detail: materials, colors, patterns
-- Maximum 2-3 sentences, focus on VISUAL DISTINGUISHING features only
-
-**ART STYLE DETECTION:**
-- PHOTOREALISTIC: Real photo or ultra-realistic 3D render
-- DIGITAL PAINTING: Painted look, brushstrokes, stylized
-- ANIME: Japanese style, large eyes, cel-shaded
-- CARTOON: Western animation, simplified features
-- The image is NOT photorealistic if it has painted textures, stylized lighting, or non-realistic skin
-
-Return JSON:
 {
     "name": "Short English name (1-2 words)",
-    "description": "Vietnamese description của đặc điểm nhận dạng: khuôn mặt, màu da, kiểu tóc màu tóc, trang phục chi tiết.",
+    "description": "Vietnamese description with SPECIFIC physical traits: face shape, skin tone, hair color/style, eye shape, clothing/costume details, accessories",
     "art_style": "Accurate style description in English. Examples: 'Digital painting with warm tones', 'Anime cel-shaded', 'Semi-realistic illustration'",
-    "is_illustration": true/false
-}`;
+    "is_illustration": true or false
+}
 
+RULES:
+- name: SHORT, MEMORABLE English name (1-2 words max)
+- description: Write in Vietnamese, be VERY SPECIFIC about costume details, colors, patterns
+- is_illustration: true if NOT photorealistic
 
-            const analysisRes = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: { parts: [{ inlineData: { data, mimeType } }, { text: analyzePrompt }] },
-                config: {
-                    responseMimeType: "application/json"
-                }
-            });
+RESPOND WITH JSON ONLY. No other text.`;
+
+            // Smart routing: Imperial Vertex → Gemini Direct (no hardcoded GoogleGenAI)
+            const currentChar = state.characters.find(c => c.id === id);
+            console.log('[Lora Gen] 🔍 Using smart vision routing (Imperial → Gemini)');
+            const analysisText = await callGeminiVisionReasoning(apiKey || '', analyzePrompt, [{ data, mimeType }]);
 
             let json = { name: "", description: "", art_style: "", is_illustration: false };
             try {
-                // Handle response text extraction safely
-                const text = (analysisRes as any).text ||
-                    (analysisRes.candidates?.[0]?.content?.parts?.[0]?.text) ||
-                    '';
-
-                if (!text) throw new Error("Empty response text");
-
-                json = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+                const cleaned = analysisText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+                json = JSON.parse(cleaned);
             } catch (e) {
-                console.error("JSON parse error", e);
+                console.warn("[Lora Gen] Direct JSON parse failed, trying extraction...");
+                try {
+                    const jsonMatch = analysisText.match(/\{[\s\S]*?"name"[\s\S]*?"description"[\s\S]*?\}/);
+                    if (jsonMatch) {
+                        json = JSON.parse(jsonMatch[0]);
+                    } else {
+                        const nameMatch = analysisText.match(/"name"\s*:\s*"([^"]+)"/);
+                        const descMatch = analysisText.match(/"description"\s*:\s*"([^"]+)"/);
+                        const styleMatch = analysisText.match(/"art_style"\s*:\s*"([^"]+)"/);
+                        const illustMatch = analysisText.match(/"is_illustration"\s*:\s*(true|false)/);
+                        if (nameMatch || descMatch) {
+                            json = {
+                                name: nameMatch?.[1] || "",
+                                description: descMatch?.[1] || "",
+                                art_style: styleMatch?.[1] || "",
+                                is_illustration: illustMatch?.[1] === 'true'
+                            };
+                        }
+                    }
+                } catch (e2) {
+                    console.error("[Lora Gen] ❌ All JSON extraction attempts failed", e2);
+                }
             }
 
             const charName = json.name || "Unnamed Character";
             const charDescription = json.description || "Character";
             let detectedStyle = json.art_style || "Digital illustration style";
 
-            // If detected as illustration, reinforce it
             if (json.is_illustration) {
                 detectedStyle = `ILLUSTRATION/PAINTED STYLE: ${detectedStyle}. This is NOT photorealistic.`;
             }
 
-            console.log('[Character Analysis] Detected style:', detectedStyle);
-
-
-            // Update character with analysis results
-            // If skipMetadata is true, we ONLY update the masterImage (if changed)
-            // and we rely on existing name/description for the subsequent prompt generation
-            const currentChar = state.characters.find(c => c.id === id);
             const finalName = options?.skipMetadata ? (currentChar?.name || charName) : charName;
             const finalDescription = options?.skipMetadata ? (currentChar?.description || charDescription) : charDescription;
 
@@ -341,99 +295,67 @@ Return JSON:
                 description: finalDescription
             });
 
-            // Step 2: Generate Face ID and Body using ONLY the detected style from the reference image
-            // Note: We use finalDescription here which might be the user's custom one
-            const styleInstruction = `
-**CRITICAL STYLE ENFORCEMENT - DO NOT DEVIATE:**
-You are generating images that MUST match the EXACT artistic style of the reference image provided.
-
-DETECTED STYLE FROM REFERENCE: "${detectedStyle}"
-
-ABSOLUTE RULES:
-1. COPY the exact art style from the reference image. If it's anime, generate anime. If photorealistic, generate photorealistic.
-2. MATCH the same color palette, shading technique, and line work as the reference.
-3. IGNORE any other style instructions. The reference image is the ONLY style guide.
-4. DO NOT apply any "cinematic", "8k", or "photorealistic" styles unless the reference is actually photorealistic.
-5. KEEP the character's exact appearance: face, hair color/style, clothing, accessories.
-
-TECHNICAL REQUIREMENTS:
-- BACKGROUND: Pure solid white (#FFFFFF) studio background only.
-- LIGHTING: Clean studio lighting that matches the reference's lighting style.
-- QUALITY: Sharp, clean, no artifacts.
-            `.trim();
-
-            // Inject Character Style Preset (e.g., Mannequin) if set globally
+            // Step 2: Generate Character Sheet (single image with multiple views)
             let characterStyleInstruction = '';
             if (state.globalCharacterStyleId) {
                 const charStyle = getCharacterStyleById(state.globalCharacterStyleId, state.customCharacterStyles || []);
                 if (charStyle) {
-                    characterStyleInstruction = `
-**CHARACTER STYLE PRESET - ABSOLUTE OVERRIDE:**
-${charStyle.promptInjection.global}
-
-PER-CHARACTER REQUIREMENT:
-${charStyle.promptInjection.character}
-
-NEGATIVE CONSTRAINTS:
-${charStyle.promptInjection.negative}
-`;
+                    characterStyleInstruction = `\nCharacter style: ${charStyle.promptInjection.global}\n`;
                     console.log('[Character Gen] Using character style preset:', charStyle.name);
                 }
             }
 
-            const facePrompt = `${characterStyleInstruction}${styleInstruction}\n\n[TASK: FACE ID]\nGenerate an EXTREME CLOSE-UP portrait of this character's face on a pure white background.\nCharacter: ${finalDescription}\nSTYLE: Match the reference exactly - "${detectedStyle}"`;
+            const sheetPrompt = `Character reference sheet. 4 columns × 2 rows grid layout. 8 panels total separated by thin borders on plain gray background.
 
-            const bodyPrompt = `${characterStyleInstruction}${styleInstruction}\n\n[TASK: FULL BODY]\nGenerate a FULL BODY view (head to toe, feet visible) of this character on a pure white background.\nPose: T-Pose or A-Pose, front view.\nCharacter: ${finalDescription}\nCOMPLETE OUTFIT MANDATORY: The character must be FULLY CLOTHED including SHOES. If shoes are not specified, add appropriate footwear.\nSTYLE: Match the reference exactly - "${detectedStyle}"`;
+TOP ROW — 4 full-body standing poses (head to toe):
+[Front view] [Left profile] [Right profile] [Back view]
 
-            const model = 'gemini-3-pro-image-preview'; // Use best model for style matching
+BOTTOM ROW — 4 close-up head-and-shoulders portraits matching the angles above:
+[Front portrait] [Left portrait] [Right portrait] [Back-of-head portrait]
 
-            console.log('[Lora Gen] 🎨 Starting Face & Body generation...', {
-                model,
-                referenceImage: image.substring(0, 50) + '...',
-                hasCharStylePreset: !!characterStyleInstruction
-            });
+Character: ${finalDescription}.
+Copy the exact same character from the reference image — same design, colors, outfit, proportions in all 8 panels.
+${characterStyleInstruction}Photorealistic, DSLR, muted tones. No text.`.trim();
 
-            // Prepare Gommo credentials from state
+            // Model priority: character's preferred → global image model → default
+            const model = currentChar?.preferredModel || state.imageModel || 'gemini-3-pro-image-preview';
+
             const gommoCredentials = state.gommoDomain && state.gommoAccessToken
                 ? { domain: state.gommoDomain, accessToken: state.gommoAccessToken }
                 : undefined;
 
-            let [faceUrl, bodyUrl] = await Promise.all([
-                callCharacterImageAPI(apiKey, facePrompt, "1:1", model, image, gommoCredentials),
-                callCharacterImageAPI(apiKey, bodyPrompt, "9:16", model, image, gommoCredentials),
-            ]);
+            console.log(`[CharSheet] 🎨 Generating character sheet for ${finalName}`);
+            console.log(`  ├─ Model: ${model}`);
+            console.log(`  └─ Style: ${detectedStyle}`);
+            let sheetUrl = await callCharacterImageAPI(apiKey, sheetPrompt, "16:9", model, image, gommoCredentials);
 
-            console.log('[Lora Gen] Generation results:', {
-                faceGenerated: !!faceUrl,
-                bodyGenerated: !!bodyUrl,
-                faceLength: faceUrl?.length || 0,
-                bodyLength: bodyUrl?.length || 0
-            });
+            if (!sheetUrl) {
+                throw new Error('Character sheet generation returned no image');
+            }
 
-            if (userId) {
-                if (faceUrl?.startsWith('data:')) {
-                    faceUrl = await uploadImageToSupabase(faceUrl, 'project-assets', `${userId}/characters/${id}_face_${Date.now()}.jpg`);
-                    console.log('[Lora Gen] ✅ Face uploaded:', faceUrl);
-                }
-                if (bodyUrl?.startsWith('data:')) {
-                    bodyUrl = await uploadImageToSupabase(bodyUrl, 'project-assets', `${userId}/characters/${id}_body_${Date.now()}.jpg`);
-                    console.log('[Lora Gen] ✅ Body uploaded:', bodyUrl);
+            // Upload sheet to cloud if available
+            let cloudSheetUrl = sheetUrl;
+            if (userId && sheetUrl.startsWith('data:')) {
+                try {
+                    cloudSheetUrl = await uploadImageToSupabase(sheetUrl, 'project-assets', `${userId}/characters/${id}_sheet_${Date.now()}.jpg`);
+                } catch (e) {
+                    console.warn('[CharSheet] Cloud upload failed for sheet, using local data');
                 }
             }
 
+            console.log(`[CharSheet] ✅ Character sheet ready for ${finalName} — 1 image, all angles`);
+
             updateCharacter(id, {
-                faceImage: faceUrl || undefined,
-                bodyImage: bodyUrl || undefined,
+                characterSheet: cloudSheetUrl,
+                sheetGenMode: 'sheet',
                 isAnalyzing: false
             });
-
-            console.log('[Lora Gen] ✅ Lora generation complete!');
 
         } catch (error: any) {
             console.error("[Lora Gen] ❌ Analyze and Generate Failed", error);
             updateCharacter(id, { isAnalyzing: false });
         }
-    }, [userApiKey, updateCharacter, setApiKeyModalOpen, userId, state.imageModel, state.characters]);
+    }, [userApiKey, updateCharacter, userId, state.imageModel, state.characters, state.globalCharacterStyleId, state.customCharacterStyles, state.gommoDomain, state.gommoAccessToken]);
 
     const generateCharacterSheets = useCallback(async (id: string) => {
         const char = state.characters.find(c => c.id === id);

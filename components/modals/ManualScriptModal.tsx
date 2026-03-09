@@ -15,9 +15,7 @@ import { useScriptAnalysis, ScriptAnalysisResult } from '../../hooks/useScriptAn
 import { useResearchPresets, ResearchPreset } from '../../hooks/useResearchPresets';
 import { GoogleGenAI } from "@google/genai";
 import { generateId } from '../../utils/helpers';
-import { processScriptToParts, processScriptToPartsSync, getElevenLabsZipFilename } from '../../utils/elevenLabsFormatter';
-
-declare const JSZip: any;
+import { formatForElevenLabs, formatForElevenLabsSync, getElevenLabsFilename } from '../../utils/elevenLabsFormatter';
 
 interface ManualScriptModalProps {
     isOpen: boolean;
@@ -177,10 +175,10 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
     const [showDirectorPicker, setShowDirectorPicker] = useState(false);
     const [sceneCountEstimate, setSceneCountEstimate] = useState<number | null>(null); // User-adjustable scene count
 
-    // Video Zone / Static Zone config
+    // Video Zone / Static Zone split
     const [videoZoneEnabled, setVideoZoneEnabled] = useState(false);
-    const [videoZoneScenes, setVideoZoneScenes] = useState(30); // Number of scenes for video (8s each)
-    const [staticZoneScenes, setStaticZoneScenes] = useState(35); // Number of scenes for static images
+    const [videoZoneScenes, setVideoZoneScenes] = useState(25);   // AI video clips (~8s each)
+    const [staticZoneScenes, setStaticZoneScenes] = useState(35);  // Static image frames
 
     // Research Notes state
     const [showResearchNotes, setShowResearchNotes] = useState(false);
@@ -240,78 +238,53 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
 
     // State for ElevenLabs export loading
     const [isExportingVO, setIsExportingVO] = useState(false);
-    const [exportProgress, setExportProgress] = useState('');
 
-    // Handler for exporting ElevenLabs-ready voiceover as ZIP (1 file per PART)
+    // Handler for exporting ElevenLabs-ready voiceover text (ZIP with per-PART files)
     const handleExportElevenLabsVO = useCallback(async () => {
         if (!scriptText.trim()) return;
         setIsExportingVO(true);
-        setExportProgress('Splitting script...');
         try {
-            let partFiles;
-            if (userApiKey) {
-                console.log('[ManualScript] Exporting ElevenLabs VO with AI (per-PART)...');
-                partFiles = await processScriptToParts(scriptText, {
+            let blob: Blob;
+            const useAI = Boolean(userApiKey);
+
+            if (useAI && userApiKey) {
+                console.log('[ManualScript] Exporting ElevenLabs VO with AI enhancement (per-part ZIP)...');
+                blob = await formatForElevenLabs(scriptText, {
                     useAI: true,
                     apiKey: userApiKey,
                     stripAfterEnd: true,
+                    outputMode: 'zip',
                 });
             } else {
                 console.log('[ManualScript] Exporting ElevenLabs VO (simple mode)...');
-                partFiles = processScriptToPartsSync(scriptText);
+                blob = formatForElevenLabsSync(scriptText);
             }
 
-            setExportProgress(`Packaging ${partFiles.length} files...`);
-
-            // Package into ZIP
-            if (typeof JSZip === 'undefined' || !JSZip) {
-                // Fallback: download individual files
-                for (const pf of partFiles) {
-                    const blob = new Blob([pf.content], { type: 'text/plain;charset=utf-8' });
-                    const url = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.href = url;
-                    link.download = pf.filename;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                    URL.revokeObjectURL(url);
-                }
-            } else {
-                const zip = new JSZip();
-                for (const pf of partFiles) {
-                    zip.file(pf.filename, pf.content);
-                }
-                const zipBlob = await zip.generateAsync({ type: 'blob' });
-                const url = URL.createObjectURL(zipBlob);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = getElevenLabsZipFilename();
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
-            }
-
-            console.log(`[ManualScript] Exported ${partFiles.length} ElevenLabs VO files`);
+            // Detect if blob is ZIP or plain text
+            const isZip = blob.type === 'application/zip' || blob.size > 0 && !blob.type.includes('text');
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = getElevenLabsFilename(undefined, isZip);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            console.log(`[ManualScript] Exported ElevenLabs VO (${(blob.size / 1024).toFixed(1)} KB, ${isZip ? 'ZIP' : 'TXT'})`);
         } catch (err) {
             console.error('[ManualScript] ElevenLabs export error:', err);
-            // Fallback to sync simple
-            const partFiles = processScriptToPartsSync(scriptText);
-            for (const pf of partFiles) {
-                const blob = new Blob([pf.content], { type: 'text/plain;charset=utf-8' });
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = pf.filename;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
-            }
+            // Fallback to sync single-file
+            const blob = formatForElevenLabsSync(scriptText);
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = getElevenLabsFilename(undefined, false);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
         } finally {
             setIsExportingVO(false);
-            setExportProgress('');
         }
     }, [scriptText, userApiKey]);
 
@@ -364,8 +337,13 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                 story: storyContext || undefined // [New]
             } : null,
             existingCharacters, // [Fixed] Check against existing characters
-            videoZoneEnabled ? (videoZoneScenes + staticZoneScenes) : (sceneCountEstimate || undefined), // Total scene count
-            videoZoneEnabled ? { enabled: true, videoScenes: videoZoneScenes, staticScenes: staticZoneScenes } : undefined
+            sceneCountEstimate || undefined, // Pass user's estimated scene count
+            // Pass Video Zone config for short sentence splitting
+            videoZoneEnabled ? {
+                enabled: true,
+                videoScenes: videoZoneScenes,
+                staticScenes: staticZoneScenes
+            } : undefined
         );
     }, [scriptText, readingSpeed, selectedModel, analyzeScript, selectedStyle, selectedDirector, directorNotes, dopNotes, storyContext, sceneCountEstimate, videoZoneEnabled, videoZoneScenes, staticZoneScenes]);
 
@@ -554,7 +532,7 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                                                 {isExportingVO ? (
                                                     <>
                                                         <div className="w-3 h-3 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
-                                                        {exportProgress || 'Processing...'}
+                                                        AI Processing...
                                                     </>
                                                 ) : (
                                                     <>📥 Export VO</>
@@ -808,122 +786,221 @@ John enters the room, wearing a tailored Armani suit..."
                                     </div>
                                 </div>
 
-                                {/* Scene Count Estimate */}
+                                {/* Scene Count Estimate + Video Zone */}
                                 <div className="bg-zinc-800/30 rounded-2xl p-4 border border-zinc-700/30 backdrop-blur-sm">
                                     <div className="flex items-center gap-2 mb-3">
                                         <Layers className="w-4 h-4 text-emerald-400" />
-                                        <span className="text-sm font-bold text-white uppercase tracking-wider">Estimated Scenes</span>
+                                        <span className="text-sm font-bold text-white uppercase tracking-wider">Scene Breakdown</span>
                                     </div>
-                                    <p className="text-xs text-zinc-500 mb-3">Số phân cảnh ước lượng. AI sẽ dùng con số này làm mục tiêu.</p>
-                                    <div className="flex items-center gap-3">
-                                        <button
-                                            onClick={() => setSceneCountEstimate(Math.max(5, (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)) - 5))}
-                                            className="w-8 h-8 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-emerald-500/50 text-white font-bold flex items-center justify-center transition-colors"
-                                        >
-                                            −
-                                        </button>
-                                        <div className="flex-1">
-                                            <input
-                                                type="number"
-                                                min={5}
-                                                max={500}
-                                                value={sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)}
-                                                onChange={(e) => setSceneCountEstimate(Math.max(5, Math.min(500, parseInt(e.target.value) || 10)))}
-                                                className="w-full bg-zinc-900/80 border border-zinc-700 rounded-xl px-4 py-2.5 text-center text-lg font-bold text-emerald-400 focus:outline-none focus:border-emerald-500 transition-colors"
-                                            />
-                                        </div>
-                                        <button
-                                            onClick={() => setSceneCountEstimate(Math.min(500, (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)) + 5))}
-                                            className="w-8 h-8 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-emerald-500/50 text-white font-bold flex items-center justify-center transition-colors"
-                                        >
-                                            +
-                                        </button>
-                                    </div>
-                                    <div className="mt-2 text-xs text-zinc-500 text-center">
-                                        ~{Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)))} words/scene
-                                    </div>
-                                </div>
 
-                                {/* Video Zone / Static Zone Config */}
-                                <div className={`rounded-2xl p-4 border backdrop-blur-sm transition-all ${videoZoneEnabled ? 'bg-gradient-to-br from-blue-900/20 to-purple-900/20 border-blue-500/40' : 'bg-zinc-800/30 border-zinc-700/30'}`}>
+                                    {/* Video Zone Toggle */}
                                     <div className="flex items-center justify-between mb-3">
-                                        <div className="flex items-center gap-2">
-                                            <Film className={`w-4 h-4 ${videoZoneEnabled ? 'text-blue-400' : 'text-zinc-500'}`} />
-                                            <span className="text-sm font-bold text-white uppercase tracking-wider">Video Zone</span>
-                                        </div>
-                                        <button
-                                            onClick={() => setVideoZoneEnabled(!videoZoneEnabled)}
-                                            className={`relative w-10 h-5 rounded-full transition-all ${videoZoneEnabled ? 'bg-blue-500' : 'bg-zinc-600'}`}
-                                        >
-                                            <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${videoZoneEnabled ? 'left-5.5' : 'left-0.5'}`}
-                                                style={{ left: videoZoneEnabled ? '22px' : '2px' }} />
-                                        </button>
-                                    </div>
-                                    <p className="text-xs text-zinc-500 mb-3">
-                                        Chia nhỏ đầu script cho video AI (8s/scene), phần còn lại cho ảnh tĩnh.
-                                    </p>
-
-                                    {videoZoneEnabled && (
-                                        <div className="space-y-3 animate-fadeIn">
-                                            {/* Video Scenes */}
-                                            <div className="bg-blue-500/10 rounded-xl p-3 border border-blue-500/20">
-                                                <div className="flex items-center gap-2 mb-2">
-                                                    <span className="text-[10px] font-bold text-blue-300 uppercase tracking-wider">🎥 Video Scenes (8s/cảnh)</span>
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                    <button
-                                                        onClick={() => setVideoZoneScenes(Math.max(5, videoZoneScenes - 5))}
-                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-blue-500/30 hover:border-blue-400 text-white font-bold flex items-center justify-center text-sm transition-colors"
-                                                    >−</button>
-                                                    <input
-                                                        type="number" min={5} max={100}
-                                                        value={videoZoneScenes}
-                                                        onChange={(e) => setVideoZoneScenes(Math.max(5, Math.min(100, parseInt(e.target.value) || 30)))}
-                                                        className="flex-1 bg-zinc-900/80 border border-blue-500/30 rounded-lg px-3 py-1.5 text-center text-sm font-bold text-blue-400 focus:outline-none focus:border-blue-400 transition-colors"
-                                                    />
-                                                    <button
-                                                        onClick={() => setVideoZoneScenes(Math.min(100, videoZoneScenes + 5))}
-                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-blue-500/30 hover:border-blue-400 text-white font-bold flex items-center justify-center text-sm transition-colors"
-                                                    >+</button>
-                                                </div>
-                                                <div className="mt-1 text-[10px] text-blue-400/60 text-center">
-                                                    ≈ {Math.round(videoZoneScenes * 8 / 60)} phút video ({videoZoneScenes} × 8s)
-                                                </div>
+                                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                                            <div
+                                                onClick={() => {
+                                                    const newEnabled = !videoZoneEnabled;
+                                                    setVideoZoneEnabled(newEnabled);
+                                                    if (newEnabled) {
+                                                        // Auto-calculate: total = video + static
+                                                        const totalWords = scriptText.split(/\s+/).filter(Boolean).length;
+                                                        const autoTotal = Math.ceil(totalWords / 10);
+                                                        const currentTotal = sceneCountEstimate || autoTotal;
+                                                        const defaultVideoScenes = Math.min(25, Math.floor(currentTotal * 0.4));
+                                                        const defaultStaticScenes = currentTotal - defaultVideoScenes;
+                                                        setVideoZoneScenes(Math.max(5, defaultVideoScenes));
+                                                        setStaticZoneScenes(Math.max(5, defaultStaticScenes));
+                                                        setSceneCountEstimate(defaultVideoScenes + defaultStaticScenes);
+                                                    }
+                                                }}
+                                                className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${videoZoneEnabled ? 'bg-emerald-500' : 'bg-zinc-700'
+                                                    }`}
+                                            >
+                                                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${videoZoneEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                                                    }`} />
                                             </div>
-
-                                            {/* Static Scenes */}
-                                            <div className="bg-purple-500/10 rounded-xl p-3 border border-purple-500/20">
-                                                <div className="flex items-center gap-2 mb-2">
-                                                    <span className="text-[10px] font-bold text-purple-300 uppercase tracking-wider">🖼️ Static Scenes (ảnh tĩnh)</span>
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                    <button
-                                                        onClick={() => setStaticZoneScenes(Math.max(5, staticZoneScenes - 5))}
-                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-purple-500/30 hover:border-purple-400 text-white font-bold flex items-center justify-center text-sm transition-colors"
-                                                    >−</button>
-                                                    <input
-                                                        type="number" min={5} max={200}
-                                                        value={staticZoneScenes}
-                                                        onChange={(e) => setStaticZoneScenes(Math.max(5, Math.min(200, parseInt(e.target.value) || 35)))}
-                                                        className="flex-1 bg-zinc-900/80 border border-purple-500/30 rounded-lg px-3 py-1.5 text-center text-sm font-bold text-purple-400 focus:outline-none focus:border-purple-400 transition-colors"
-                                                    />
-                                                    <button
-                                                        onClick={() => setStaticZoneScenes(Math.min(200, staticZoneScenes + 5))}
-                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-purple-500/30 hover:border-purple-400 text-white font-bold flex items-center justify-center text-sm transition-colors"
-                                                    >+</button>
-                                                </div>
-                                                <div className="mt-1 text-[10px] text-purple-400/60 text-center">
-                                                    ~{Math.ceil((scriptText.split(/\s+/).filter(Boolean).length - videoZoneScenes * 20) / Math.max(1, staticZoneScenes))} words/scene
-                                                </div>
-                                            </div>
-
-                                            {/* Summary */}
-                                            <div className="bg-zinc-900/50 rounded-lg p-2 text-center">
-                                                <span className="text-xs text-zinc-400">
-                                                    Tổng: <span className="text-blue-400 font-bold">{videoZoneScenes}</span> video + <span className="text-purple-400 font-bold">{staticZoneScenes}</span> static = <span className="text-emerald-400 font-bold">{videoZoneScenes + staticZoneScenes}</span> scenes
+                                            <span className="text-xs font-medium text-zinc-300">Video Zone Split</span>
+                                        </label>
+                                        {videoZoneEnabled && (() => {
+                                            const totalScenes = videoZoneScenes + staticZoneScenes;
+                                            const videoPct = Math.round((videoZoneScenes / totalScenes) * 100);
+                                            return (
+                                                <span className="text-[10px] text-zinc-500">
+                                                    Total: {totalScenes} scenes
                                                 </span>
+                                            );
+                                        })()}
+                                    </div>
+
+                                    {videoZoneEnabled ? (
+                                        <div className="space-y-3">
+                                            {/* 🎥 Video Zone */}
+                                            <div className="bg-gradient-to-r from-blue-500/10 to-cyan-500/10 border border-blue-500/20 rounded-xl p-3">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="text-sm">🎥</span>
+                                                        <span className="text-xs font-bold text-blue-300 uppercase">Video Zone</span>
+                                                    </div>
+                                                    <span className="text-[10px] text-blue-400/70">~8s/scene • AI video clips</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => {
+                                                            const newVal = Math.max(5, videoZoneScenes - 5);
+                                                            setVideoZoneScenes(newVal);
+                                                            setSceneCountEstimate(newVal + staticZoneScenes);
+                                                        }}
+                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-blue-500/50 text-white font-bold flex items-center justify-center transition-colors text-sm"
+                                                    >
+                                                        −
+                                                    </button>
+                                                    <input
+                                                        type="number"
+                                                        min={5}
+                                                        max={200}
+                                                        value={videoZoneScenes}
+                                                        onChange={(e) => {
+                                                            const val = Math.max(5, Math.min(200, parseInt(e.target.value) || 5));
+                                                            setVideoZoneScenes(val);
+                                                            setSceneCountEstimate(val + staticZoneScenes);
+                                                        }}
+                                                        className="flex-1 bg-zinc-900/80 border border-zinc-700 rounded-lg px-3 py-1.5 text-center text-base font-bold text-blue-400 focus:outline-none focus:border-blue-500 transition-colors"
+                                                    />
+                                                    <button
+                                                        onClick={() => {
+                                                            const newVal = Math.min(200, videoZoneScenes + 5);
+                                                            setVideoZoneScenes(newVal);
+                                                            setSceneCountEstimate(newVal + staticZoneScenes);
+                                                        }}
+                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-blue-500/50 text-white font-bold flex items-center justify-center transition-colors text-sm"
+                                                    >
+                                                        +
+                                                    </button>
+                                                </div>
+                                                <div className="mt-1.5 text-[10px] text-blue-400/60 text-center">
+                                                    ≈ {Math.round(videoZoneScenes * 8 / 60)} min {Math.round(videoZoneScenes * 8 % 60)}s ({videoZoneScenes} × 8s)
+                                                </div>
                                             </div>
+
+                                            {/* 🖼️ Static Zone */}
+                                            <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/20 rounded-xl p-3">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="text-sm">🖼️</span>
+                                                        <span className="text-xs font-bold text-amber-300 uppercase">Static Zone</span>
+                                                    </div>
+                                                    <span className="text-[10px] text-amber-400/70">Static image frames</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={() => {
+                                                            const newVal = Math.max(5, staticZoneScenes - 5);
+                                                            setStaticZoneScenes(newVal);
+                                                            setSceneCountEstimate(videoZoneScenes + newVal);
+                                                        }}
+                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-amber-500/50 text-white font-bold flex items-center justify-center transition-colors text-sm"
+                                                    >
+                                                        −
+                                                    </button>
+                                                    <input
+                                                        type="number"
+                                                        min={5}
+                                                        max={300}
+                                                        value={staticZoneScenes}
+                                                        onChange={(e) => {
+                                                            const val = Math.max(5, Math.min(300, parseInt(e.target.value) || 5));
+                                                            setStaticZoneScenes(val);
+                                                            setSceneCountEstimate(videoZoneScenes + val);
+                                                        }}
+                                                        className="flex-1 bg-zinc-900/80 border border-zinc-700 rounded-lg px-3 py-1.5 text-center text-base font-bold text-amber-400 focus:outline-none focus:border-amber-500 transition-colors"
+                                                    />
+                                                    <button
+                                                        onClick={() => {
+                                                            const newVal = Math.min(300, staticZoneScenes + 5);
+                                                            setStaticZoneScenes(newVal);
+                                                            setSceneCountEstimate(videoZoneScenes + newVal);
+                                                        }}
+                                                        className="w-7 h-7 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-amber-500/50 text-white font-bold flex items-center justify-center transition-colors text-sm"
+                                                    >
+                                                        +
+                                                    </button>
+                                                </div>
+                                                {(() => {
+                                                    const totalWords = scriptText.split(/\s+/).filter(Boolean).length;
+                                                    const videoWords = Math.round(videoZoneScenes * 20); // ~20 words per 8s video scene
+                                                    const staticWords = Math.max(0, totalWords - videoWords);
+                                                    const wordsPerStaticScene = staticZoneScenes > 0 ? Math.ceil(staticWords / staticZoneScenes) : 0;
+                                                    const wpm = 150; // medium
+                                                    const staticDuration = Math.round((staticWords / wpm) * 60);
+                                                    return (
+                                                        <div className="mt-1.5 text-[10px] text-amber-400/60 text-center">
+                                                            ≈ {Math.floor(staticDuration / 60)} min {staticDuration % 60}s • ~{wordsPerStaticScene} words/scene
+                                                        </div>
+                                                    );
+                                                })()}
+                                            </div>
+
+                                            {/* Duration Summary Bar */}
+                                            {(() => {
+                                                const totalWords = scriptText.split(/\s+/).filter(Boolean).length;
+                                                const videoDuration = videoZoneScenes * 8;
+                                                const videoWords = Math.round(videoZoneScenes * 20);
+                                                const staticWords = Math.max(0, totalWords - videoWords);
+                                                const staticDuration = Math.round((staticWords / 150) * 60); // medium WPM
+                                                const totalDuration = videoDuration + staticDuration;
+                                                const videoPct = Math.round((videoDuration / totalDuration) * 100);
+                                                return (
+                                                    <div>
+                                                        <div className="flex h-2 rounded-full overflow-hidden bg-zinc-900/80 mt-1">
+                                                            <div
+                                                                className="bg-gradient-to-r from-blue-500 to-cyan-500 transition-all"
+                                                                style={{ width: `${videoPct}%` }}
+                                                            />
+                                                            <div
+                                                                className="bg-gradient-to-r from-amber-500 to-orange-500 transition-all"
+                                                                style={{ width: `${100 - videoPct}%` }}
+                                                            />
+                                                        </div>
+                                                        <div className="flex justify-between mt-1 text-[10px] text-zinc-500">
+                                                            <span>🎥 {videoPct}% ({Math.floor(videoDuration / 60)}m{videoDuration % 60}s)</span>
+                                                            <span className="font-medium text-zinc-400">≈ {Math.floor(totalDuration / 60)}m total</span>
+                                                            <span>🖼️ {100 - videoPct}% ({Math.floor(staticDuration / 60)}m{staticDuration % 60}s)</span>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
+                                    ) : (
+                                        /* Simple scene count (no video zone split) */
+                                        <>
+                                            <p className="text-xs text-zinc-500 mb-3">Số phân cảnh ước lượng. AI sẽ dùng con số này làm mục tiêu.</p>
+                                            <div className="flex items-center gap-3">
+                                                <button
+                                                    onClick={() => setSceneCountEstimate(Math.max(5, (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)) - 5))}
+                                                    className="w-8 h-8 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-emerald-500/50 text-white font-bold flex items-center justify-center transition-colors"
+                                                >
+                                                    −
+                                                </button>
+                                                <div className="flex-1">
+                                                    <input
+                                                        type="number"
+                                                        min={5}
+                                                        max={500}
+                                                        value={sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)}
+                                                        onChange={(e) => setSceneCountEstimate(Math.max(5, Math.min(500, parseInt(e.target.value) || 10)))}
+                                                        className="w-full bg-zinc-900/80 border border-zinc-700 rounded-xl px-4 py-2.5 text-center text-lg font-bold text-emerald-400 focus:outline-none focus:border-emerald-500 transition-colors"
+                                                    />
+                                                </div>
+                                                <button
+                                                    onClick={() => setSceneCountEstimate(Math.min(500, (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)) + 5))}
+                                                    className="w-8 h-8 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-emerald-500/50 text-white font-bold flex items-center justify-center transition-colors"
+                                                >
+                                                    +
+                                                </button>
+                                            </div>
+                                            <div className="mt-2 text-xs text-zinc-500 text-center">
+                                                ~{Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / (sceneCountEstimate || Math.ceil(scriptText.split(/\s+/).filter(Boolean).length / 10)))} words/scene
+                                            </div>
+                                        </>
                                     )}
                                 </div>
 

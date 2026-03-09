@@ -76,6 +76,7 @@ const migrateCharacter = (char: any): Character => {
     return {
       ...char,
       masterImage: null, // New field
+      characterSheet: null, // Multi-view character sheet
       faceImage,
       bodyImage,
       props: props.slice(0, 3), // Giới hạn 3 props
@@ -83,7 +84,11 @@ const migrateCharacter = (char: any): Character => {
   }
   // Nếu đã là cấu trúc mới nhưng thiếu masterImage (do update version)
   if (char.masterImage === undefined) {
-    return { ...char, masterImage: null };
+    return { ...char, masterImage: null, characterSheet: char.characterSheet ?? null };
+  }
+  // Ensure characterSheet exists
+  if (char.characterSheet === undefined) {
+    return { ...char, characterSheet: null };
   }
   return char as Character;
 };

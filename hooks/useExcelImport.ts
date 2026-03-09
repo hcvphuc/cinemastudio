@@ -165,6 +165,7 @@ export function useExcelImport() {
                     bodyImage: null,
                     sideImage: null,
                     backImage: null,
+                    characterSheet: null,
                     props: [],
                     isDefault: false
                 };

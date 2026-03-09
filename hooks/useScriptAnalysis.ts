@@ -9,8 +9,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { getAIProvider, getFallbackProvider } from '../utils/aiProvider';
-import type { AIProvider } from '../utils/aiProvider';
+import { GoogleGenAI } from "@google/genai";
 import { Scene, SceneGroup, Character, CharacterStyleDefinition } from '../types';
 import { DirectorPreset, DIRECTOR_PRESETS } from '../constants/directors';
 import { resolveStyleWithInheritance } from '../constants/characterStyles';
@@ -43,8 +42,8 @@ export interface SceneAnalysis {
     chapterId: string;
     characterNames: string[];
     estimatedDuration: number;
+    zone?: 'video' | 'static';  // Video Zone (short VO, ~8s clip) or Static Zone (image frame)
     needsExpansion: boolean; // If VO is long and needs multiple visual scenes
-    isVideoZone?: boolean; // True = first N scenes for video generation, false = static image
     expansionScenes?: {
         visualPrompt: string;
         isBRoll: boolean;
@@ -189,7 +188,7 @@ export function useScriptAnalysis(userApiKey: string | null) {
         researchNotes?: { director?: string; dop?: string; story?: string } | null,
         activeCharacters: { id: string; name: string; description?: string }[] = [], // New Param for auto-assignment
         sceneCountEstimate?: number, // User's desired scene count (optional)
-        videoZoneConfig?: { enabled: boolean; videoScenes: number; staticScenes: number } // Video/Static Zone split
+        videoZoneConfig?: { enabled: boolean; videoScenes: number; staticScenes: number } // Video Zone split config
     ): Promise<ScriptAnalysisResult | null> => {
         if (!userApiKey) {
             setAnalysisError('API key required');
@@ -201,8 +200,7 @@ export function useScriptAnalysis(userApiKey: string | null) {
         setAnalysisError(null);
 
         try {
-            const provider = getAIProvider(userApiKey);
-            console.log(`[ScriptAnalysis] 🔑 Provider: ${provider.type}, Key: ${userApiKey?.substring(0, 10)}..., userApiKey length: ${userApiKey?.length || 0}`);
+            const ai = new GoogleGenAI({ apiKey: userApiKey });
             const wpm = readingSpeed === 'slow' ? WPM_SLOW : readingSpeed === 'fast' ? WPM_FAST : WPM_MEDIUM;
             const wordCount = scriptText.split(/\s+/).length;
             const estimatedTotalDuration = Math.ceil((wordCount / wpm) * 60);
@@ -393,19 +391,39 @@ export function useScriptAnalysis(userApiKey: string | null) {
 
             console.log(`[ScriptAnalysis] Scene count: auto=${autoExpectedCount}, user=${sceneCountEstimate || 'none'}, final=${expectedSceneCount}`);
 
-            // Video Zone / Static Zone config
-            const isVideoZone = videoZoneConfig?.enabled && videoZoneConfig.videoScenes > 0;
-            const videoScenes = videoZoneConfig?.videoScenes || 0;
-            const staticScenes = videoZoneConfig?.staticScenes || 35;
-            const totalZoneScenes = isVideoZone ? (videoScenes + staticScenes) : expectedSceneCount;
-            // Words per second at reading speed (~2.5 words/sec)
-            const wordsPerVideoScene = Math.round(2.5 * 8); // 8 seconds of VO ≈ 20 words
-            const videoZoneWords = isVideoZone ? (videoScenes * wordsPerVideoScene) : 0;
-            const staticZoneWords = isVideoZone ? Math.max(1, wordCount - videoZoneWords) : wordCount;
-            const wordsPerStaticScene = isVideoZone ? Math.ceil(staticZoneWords / staticScenes) : 0;
+            // ═══════════════════════════════════════════════════════════════
+            // VIDEO ZONE SPLITTING INSTRUCTIONS
+            // When enabled, AI must create short sentences for video scenes
+            // ═══════════════════════════════════════════════════════════════
+            let videoZoneInstructions = '';
+            if (videoZoneConfig?.enabled) {
+                const { videoScenes, staticScenes } = videoZoneConfig;
+                videoZoneInstructions = `
+*** VIDEO ZONE SPLIT — CRITICAL REQUIREMENT ***
+The output must be divided into TWO zones:
 
-            if (isVideoZone) {
-                console.log(`[ScriptAnalysis] 🎬 VIDEO ZONE: ${videoScenes} scenes × 8s (${videoZoneWords} words) → STATIC ZONE: ${staticScenes} scenes (${staticZoneWords} words, ~${wordsPerStaticScene} words/scene)`);
+🎥 VIDEO ZONE (first ${videoScenes} scenes):
+- Each scene will be rendered as an ~8-second AI video clip.
+- voiceOverText MUST be VERY SHORT: 15–20 words maximum (HARD LIMIT: 25 words).
+- If a paragraph is long, SPLIT it into multiple short scenes.
+- Each scene = 1 single short sentence or 1 action beat.
+- Prefer punchy, dynamic sentences. NO compound sentences with commas.
+- Example good: "Anh ta bước vào phòng, ánh đèn neon chiếu vào mặt."
+- Example bad: "Anh ta bước vào phòng, ánh đèn neon chiếu vào mặt, và mọi người quay lại nhìn, trong khi nhạc dừng lại."
+- The visual prompt for video scenes should describe MOTION and CAMERA MOVEMENT.
+
+🖼️ STATIC ZONE (remaining ${staticScenes} scenes):
+- These are standard static image frames.
+- voiceOverText can be longer (normal length, ~30-60 words per scene).
+- Visual prompts describe a single still frame.
+
+⚠️ RULES:
+- Total scenes = ${videoScenes} (video) + ${staticScenes} (static) = ${videoScenes + staticScenes}
+- The FIRST ${videoScenes} scenes in the "scenes" array are VIDEO ZONE.
+- The REMAINING ${staticScenes} scenes are STATIC ZONE.
+- Do NOT mix: short video-style scenes ONLY in the first ${videoScenes} entries.
+- Add a field "zone": "video" or "zone": "static" to each scene object.
+`;
             }
 
             // [New] Existing Character Library - Inject to avoid duplicates
@@ -538,43 +556,21 @@ Input VO: "He felt the eyes of everyone on him." (Location: Dark Alley)
 Do NOT hide important actions inside B-rolls. They need to be MAIN scenes.
             `;
 
-            // Build Video Zone prompt injection
-            const videoZonePrompt = isVideoZone ? `
-*** 🎬 CRITICAL: VIDEO ZONE / STATIC ZONE SPLIT ***
-The final video has TWO distinct zones:
-
-🎥 VIDEO ZONE (First ${videoScenes} shots): 
-- These shots will be converted to 8-second AI video clips
-- Each shot MUST cover ONLY ~${wordsPerVideoScene} words (~8 seconds of narration)
-- Split the BEGINNING of the script into very granular, detailed shots
-- Focus on: dramatic moments, character introductions, establishing shots
-- These should be the first ~${videoZoneWords} words of the script
-- EVERY sentence with action, emotion, or visual change = SEPARATE shot
-
-🖼️ STATIC ZONE (Remaining ${staticScenes} shots):
-- These shots will be static image frames shown longer
-- Each shot covers ~${wordsPerStaticScene} words of narration
-- Group multiple sentences into ONE shot when they share the same visual
-- Summarize longer passages into single compelling frames
-
-⚠️ TOTAL SHOTS: EXACTLY ${totalZoneScenes} (${videoScenes} video + ${staticScenes} static)
-Label each shot: [VIDEO] Shot 1, [VIDEO] Shot 2, ... [STATIC] Shot ${videoScenes + 1}, ...
-` : '';
-
             const clusteringUserPrompt = `
 Analyze and REWRITE the following voice-over script into a list of "VISUAL SHOTS".
 Don't worry about JSON format yet. Just simple text blocks.
 
-${isVideoZone ? videoZonePrompt : `*** HARD CONSTRAINT - TARGET SCENE COUNT: EXACTLY ${expectedSceneCount} shots (±10%) ***
-${sceneCountEstimate ? `⚠️ The user has EXPLICITLY requested ${sceneCountEstimate} scenes. This is NOT a suggestion — it is a HARD REQUIREMENT. You MUST produce between ${Math.floor(sceneCountEstimate * 0.9)} and ${Math.ceil(sceneCountEstimate * 1.1)} shots.` : `Auto-estimated target: ~${expectedSceneCount} shots based on word count and reading speed.`}`}
+*** HARD CONSTRAINT - TARGET SCENE COUNT: EXACTLY ${expectedSceneCount} shots (±10%) ***
+${sceneCountEstimate ? `⚠️ The user has EXPLICITLY requested ${sceneCountEstimate} scenes. This is NOT a suggestion — it is a HARD REQUIREMENT. You MUST produce between ${Math.floor(sceneCountEstimate * 0.9)} and ${Math.ceil(sceneCountEstimate * 1.1)} shots.` : `Auto-estimated target: ~${expectedSceneCount} shots based on word count and reading speed.`}
 
 RULES FOR HITTING THE TARGET:
-${isVideoZone ? `- First ${videoScenes} shots: MICRO-SHOTS (~${wordsPerVideoScene} words each) from the BEGINNING of the script
-- Remaining ${staticScenes} shots: LARGER shots (~${wordsPerStaticScene} words each) for the REST` : `- If you have MORE shots than target: MERGE similar/adjacent shots into one (combine their descriptions)
+- If you have MORE shots than target: MERGE similar/adjacent shots into one (combine their descriptions)
 - If you have FEWER shots than target: SPLIT long/complex shots into multiple angles
-- Each shot should cover roughly ${Math.ceil(wordCount / expectedSceneCount)} words of the script`}
+- Each shot should cover roughly ${Math.ceil(wordCount / expectedSceneCount)} words of the script
 - Do NOT create micro-shots for single sentences unless dramatically important
 - Prioritize QUALITY over QUANTITY — each shot must be cinematically meaningful
+
+${videoZoneInstructions}
 
 INPUT SCRIPT:
 """
@@ -582,43 +578,21 @@ ${scriptText}
 """
 
 OUTPUT FORMAT:
-${isVideoZone ? `- [VIDEO] Shot 1: [Visual Description] (Covers text: "...")
-- [VIDEO] Shot 2: [Visual Description] (Covers text: "...")
-...
-- [STATIC] Shot ${videoScenes + 1}: [Visual Description] (Covers text: "...")
-...` : `- Shot 1: [Visual Description] (Covers text: "...")
+- Shot 1: [Visual Description] (Covers text: "...")
 - Shot 2: [Visual Description] (Covers text: "...")
-...`}
-FINAL CHECK: Count your shots. ${isVideoZone ? `You MUST have EXACTLY ${videoScenes} [VIDEO] shots and ${staticScenes} [STATIC] shots = ${totalZoneScenes} total.` : `If total is more than ${Math.ceil(expectedSceneCount * 1.1)}, MERGE shots until within range.`}
+...
+${videoZoneConfig?.enabled ? `⚠️ Remember: The FIRST ${videoZoneConfig.videoScenes} shots must have SHORT text (15-20 words max). Mark them as [VIDEO] shots.
+The remaining ${videoZoneConfig.staticScenes} shots are [STATIC] with normal-length text.` : ''}
+FINAL CHECK: Count your shots. If total is more than ${Math.ceil(expectedSceneCount * 1.1)}, MERGE shots until within range.
             `;
-
-            // Helper: call provider with auto-fallback
-            const callWithFallback = async (
-                primaryProvider: AIProvider,
-                prompt: string,
-                config?: any
-            ) => {
-                try {
-                    return await primaryProvider.generateText(prompt, config);
-                } catch (primaryError: any) {
-                    console.warn(`[ScriptAnalysis] ⚠️ Primary provider (${primaryProvider.type}) failed:`, primaryError.message);
-                    const fallback = getFallbackProvider();
-                    if (fallback) {
-                        console.log(`[ScriptAnalysis] ⚡ Retrying with fallback provider (${fallback.type})...`);
-                        return await fallback.generateText(prompt, config);
-                    }
-                    throw primaryError; // No fallback available
-                }
-            };
 
             // Call Step 1 (Clustering)
             // Use gemini-2.5-flash for speed if not generating JSON
-            const clusteringResult = await callWithFallback(
-                provider,
-                clusteringSystemPrompt + "\n\n" + clusteringUserPrompt,
-                { model: 'gemini-2.5-flash' }
-            );
-            const visualPlan = clusteringResult.text || '';
+            const clusteringResponse = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: [{ role: 'user', parts: [{ text: clusteringSystemPrompt + "\n\n" + clusteringUserPrompt }] }]
+            });
+            const visualPlan = clusteringResponse.text || '';
             console.log('[ScriptAnalysis] 🧠 Visual Plan:', visualPlan);
 
 
@@ -640,14 +614,10 @@ ${visualPlan}
 """
 
 *** MANDATORY SCENE COUNT CONSTRAINT ***
-${isVideoZone ? `🎬 VIDEO/STATIC ZONE MODE ACTIVE:
-- Total target: ${totalZoneScenes} scenes (${videoScenes} video zone + ${staticScenes} static zone)
-- First ${videoScenes} scenes = VIDEO ZONE (very short, ~${wordsPerVideoScene} words each, ~8s of narration)
-- Remaining ${staticScenes} scenes = STATIC ZONE (longer, ~${wordsPerStaticScene} words each)
-- The video zone covers the FIRST ~${videoZoneWords} words of the script
-- The static zone covers the REST (~${staticZoneWords} words)
-- Mark each scene with "isVideoZone": true or false in the JSON` : `TARGET: ${expectedSceneCount} main scenes (±10%). Maximum allowed: ${Math.ceil(expectedSceneCount * 1.1)}.
-${sceneCountEstimate ? `The user explicitly requested ${sceneCountEstimate} scenes. You MUST respect this. Do NOT exceed ${Math.ceil(sceneCountEstimate * 1.1)} scenes in your "scenes" array.` : ''}`}
+TARGET: ${expectedSceneCount} main scenes (±10%). Maximum allowed: ${Math.ceil(expectedSceneCount * 1.1)}.
+
+${videoZoneInstructions}
+${sceneCountEstimate ? `The user explicitly requested ${sceneCountEstimate} scenes. You MUST respect this. Do NOT exceed ${Math.ceil(sceneCountEstimate * 1.1)} scenes in your "scenes" array.` : ''}
 - If the Visual Plan has more shots than target, MERGE adjacent shots with similar location/action into one scene
 - If you exceed the target, your response will be REJECTED. Merge scenes before outputting.
 - B-Roll expansionScenes do NOT count toward this limit, but keep them minimal (max 1-2 per main scene)
@@ -764,43 +734,114 @@ RESPOND WITH JSON ONLY:
   "scenes": [
     {
       "voiceOverText": "March 2013, Baltimore. A man walks through the rain.",
+      "zone": "video",
       "dialogueText": null,
       "dialogueSpeaker": null,
       "visualPrompt": "WIDE SHOT. Rain-soaked street. A silhouette...",
       "chapterId": "chapter_1",
       "characterNames": ["The Man"],
-      "needsExpansion": false,
-      "isVideoZone": true
+      "needsExpansion": false
     },
     {
       "voiceOverText": "The officer approached and spoke.",
+      "zone": "static",
       "dialogueText": "Stop right there! Show me your hands!",
       "dialogueSpeaker": "Officer",
       "visualPrompt": "MEDIUM SHOT. Officer pointing...",
       "chapterId": "chapter_1",
       "characterNames": ["Officer", "The Man"],
-      "needsExpansion": false,
-      "isVideoZone": false
+      "needsExpansion": false
     }
   ]
-}${isVideoZone ? `\n\n⚠️ CRITICAL: The first ${videoScenes} scenes MUST have "isVideoZone": true. The rest MUST have "isVideoZone": false.` : ''}`;
-
+}`;
 
             setAnalysisStage('connecting');
-            const jsonResult = await callWithFallback(provider, prompt, {
+            const response = await ai.models.generateContent({
                 model: modelName,
-                temperature: 0.3,
-                responseMimeType: 'application/json',
-                maxOutputTokens: 65536,
-                ...(thinkingBudget ? { thinkingConfig: { thinkingBudget } } : {})
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                config: {
+                    temperature: 0.3,
+                    responseMimeType: 'application/json',
+                    maxOutputTokens: 65536,
+                    ...(thinkingBudget && {
+                        thinkingConfig: { thinkingBudget }
+                    })
+                }
             });
 
             setAnalysisStage('post-processing');
-            const text = jsonResult.text || '';
-            const jsonMatch = text.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) throw new Error('No JSON in response');
-
-            const parsed = JSON.parse(jsonMatch[0]);
+            const text = response.text || '';
+            
+            // Robust JSON extraction and repair
+            let jsonStr = text;
+            
+            // Step 1: Strip markdown code fences if present
+            jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+            
+            // Step 2: Extract JSON object (outermost { ... })
+            const firstBrace = jsonStr.indexOf('{');
+            const lastBrace = jsonStr.lastIndexOf('}');
+            if (firstBrace === -1) throw new Error('No JSON found in response');
+            
+            if (lastBrace > firstBrace) {
+                jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
+            } else {
+                // Response was truncated — no closing brace found
+                jsonStr = jsonStr.substring(firstBrace);
+                console.warn('[ScriptAnalysis] ⚠️ JSON appears truncated (no closing }). Attempting repair...');
+            }
+            
+            // Step 3: Repair common JSON issues from LLM responses
+            const repairJson = (raw: string): string => {
+                let s = raw;
+                // Fix trailing commas before } or ]
+                s = s.replace(/,\s*([\]}])/g, '$1');
+                // Fix unquoted property names (common LLM error)
+                s = s.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+                // Fix single-quoted strings → double-quoted
+                // (careful not to break apostrophes inside already-double-quoted strings)
+                // Only fix obvious cases: keys like 'value' at start of value position
+                s = s.replace(/:\s*'([^']*)'/g, ': "$1"');
+                return s;
+            };
+            
+            // Step 4: Try parsing, with repair fallback
+            let parsed: any;
+            try {
+                parsed = JSON.parse(jsonStr);
+            } catch (e1) {
+                console.warn('[ScriptAnalysis] ⚠️ Initial JSON.parse failed, attempting repair...', (e1 as Error).message);
+                try {
+                    const repaired = repairJson(jsonStr);
+                    parsed = JSON.parse(repaired);
+                    console.log('[ScriptAnalysis] ✅ JSON repair succeeded');
+                } catch (e2) {
+                    // Last resort: try to close truncated JSON by balancing brackets
+                    console.warn('[ScriptAnalysis] ⚠️ Repair failed, trying bracket-balancing...', (e2 as Error).message);
+                    try {
+                        let balanced = repairJson(jsonStr);
+                        // Count open/close brackets
+                        const openBraces = (balanced.match(/{/g) || []).length;
+                        const closeBraces = (balanced.match(/}/g) || []).length;
+                        const openBrackets = (balanced.match(/\[/g) || []).length;
+                        const closeBrackets = (balanced.match(/]/g) || []).length;
+                        
+                        // Remove any trailing incomplete string/value
+                        balanced = balanced.replace(/,\s*"[^"]*$/, ''); // trailing incomplete key
+                        balanced = balanced.replace(/,\s*$/, ''); // trailing comma
+                        balanced = balanced.replace(/:\s*"[^"]*$/, ': ""'); // trailing incomplete value
+                        
+                        // Close missing brackets/braces
+                        for (let i = 0; i < openBrackets - closeBrackets; i++) balanced += ']';
+                        for (let i = 0; i < openBraces - closeBraces; i++) balanced += '}';
+                        
+                        parsed = JSON.parse(balanced);
+                        console.log('[ScriptAnalysis] ✅ Bracket-balancing repair succeeded (response was truncated)');
+                    } catch (e3) {
+                        throw new Error(`Failed to parse AI response as JSON. The response may be too large. Try reducing script length or scene count. Error: ${(e1 as Error).message}`);
+                    }
+                }
+            }
 
             // Calculate durations and finalize
             const result: ScriptAnalysisResult = {
@@ -987,15 +1028,7 @@ RESPOND WITH JSON ONLY:
 
         } catch (error: any) {
             console.error('[ScriptAnalysis] ❌ Error:', error);
-            console.error('[ScriptAnalysis] ❌ Provider info:', {
-                userApiKeyPrefix: userApiKey?.substring(0, 10),
-                userApiKeyLength: userApiKey?.length,
-                errorName: error?.name,
-                errorMessage: error?.message,
-                errorStack: error?.stack?.substring(0, 200)
-            });
-            const debugInfo = `[Provider: ${userApiKey?.startsWith('vai-') ? 'vertex-key' : 'gemini'}, Key: ${userApiKey?.substring(0, 8)}..., Length: ${userApiKey?.length || 0}]`;
-            setAnalysisError(`${error.message || 'Analysis failed'} ${debugInfo}`);
+            setAnalysisError(error.message || 'Analysis failed');
             return null;
         } finally {
             setIsAnalyzing(false);

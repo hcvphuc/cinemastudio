@@ -12,7 +12,7 @@ interface CharacterDetailModalProps {
     setDefault: (id: string) => void;
     onAnalyze: (id: string, image: string, options?: { skipMetadata?: boolean }) => void;
     onGenerateSheets: (id: string) => void;
-    onEditImage: (id: string, image: string, type: 'master' | 'face' | 'body' | 'prop' | 'side' | 'back', propIndex?: number) => void;
+    onEditImage: (id: string, image: string, type: 'master' | 'face' | 'body' | 'prop' | 'side' | 'back' | 'sheet', propIndex?: number) => void;
     onOpenCharGen: (id: string, prompt?: string) => void;
     onDelete: (id: string) => void;
 }
@@ -125,12 +125,49 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
                             <div className="mb-3">
                                 <label className="block text-xs font-medium text-gray-400 mb-1">Model tạo Lora:</label>
                                 <select
-                                    value={character.preferredModel || 'gemini-3-pro-image-preview'}
+                                    value={character.preferredModel || 'gemini-image-2k'}
                                     onChange={(e) => updateCharacter(character.id, { preferredModel: e.target.value })}
                                     className="w-full bg-brand-dark/80 border border-gray-600 rounded px-3 py-2 text-sm text-brand-cream focus:outline-none focus:border-brand-orange"
                                 >
-                                    <option value="gemini-3-pro-image-preview">🔵 Nano Banana Pro [Gemini]</option>
-                                    <option value="google_nano_banana_pro">🟡 Nano Banana Pro [Gommo]</option>
+                                    {/* 🐣 UNIFIED (Priority 1 — auto-failover) */}
+                                    <optgroup label="🐣 Unified (Auto-Failover)">
+                                        <option value="gemini-image-1k">🐣 Gemini Image 1K (1408×768) — $0.36</option>
+                                        <option value="gemini-image-2k">🐣 Gemini Image 2K (2816×1536) — $0.45</option>
+                                        <option value="gemini-image-4k">🐣 Gemini Image 4K (5632×3072) — $0.50</option>
+                                        <option value="gemini-2.5-flash-image">⚡ Gemini 2.5 Flash (1024²) — $0.25</option>
+                                    </optgroup>
+                                    {/* 👑 LEGACY (still works) */}
+                                    <optgroup label="👑 Legacy (tier-specific)">
+                                        <option value="gem/gemini-3.1-flash-image-1k">👑 [Legacy] Gemini 3.1 [1K]</option>
+                                        <option value="gem/gemini-3.1-flash-image-2k">👑 [Legacy] Gemini 3.1 [2K]</option>
+                                        <option value="gem/gemini-3.1-flash-image-4k">👑 [Legacy] Gemini 3.1 [4K]</option>
+                                    </optgroup>
+                                    {/* 🟡 GOMMO (Priority 2) */}
+                                    <optgroup label="🟡 Gommo Proxy">
+                                        <option value="google_image_gen_banana_pro">🟡 Nano Banana Pro [Gommo]</option>
+                                        <option value="seedream_4_0">🟡 Seedream 4.0 [Gommo]</option>
+                                        <option value="o1">🟡 IMAGE O1 [Gommo]</option>
+                                    </optgroup>
+                                    {/* Other providers */}
+                                    <optgroup label="── Khác ──">
+                                        <option value="fal-ai/flux-general">🚀 Flux.1 [Dev] Consistency</option>
+                                        <option value="gemini-3-pro-image-preview">🔵 Nano Banana Pro [Direct]</option>
+                                    </optgroup>
+                                </select>
+                            </div>
+
+                            {/* Vision Model Selector for Analysis */}
+                            <div className="mb-3">
+                                <label className="block text-xs font-medium text-gray-400 mb-1">🔍 Model phân tích ảnh:</label>
+                                <select
+                                    value={character.preferredVisionModel || 'auto'}
+                                    onChange={(e) => updateCharacter(character.id, { preferredVisionModel: e.target.value })}
+                                    className="w-full bg-brand-dark/80 border border-gray-600 rounded px-3 py-2 text-sm text-brand-cream focus:outline-none focus:border-brand-orange"
+                                >
+                                    <option value="auto">🔄 Tự động (Imperial → Gemini → Groq)</option>
+                                    <option value="imperial">👑 Imperial Vertex (gem/gemini-3-pro)</option>
+                                    <option value="gemini">💎 Gemini Direct (cần API Key)</option>
+                                    <option value="groq">⚡ Groq Vision (Llama 4 Scout)</option>
                                 </select>
                             </div>
 
@@ -165,34 +202,30 @@ export const CharacterDetailModal: React.FC<CharacterDetailModalProps> = ({
 
                 <div className="border-t border-gray-700 my-4"></div>
 
-                {/* Character Sheets (2 Views) */}
+                {/* Character Sheet (Multi-View Reference) */}
                 <div>
-                    <h3 className="text-sm font-bold text-gray-300 mb-2 uppercase tracking-wider">Góc Nhìn Nhân Vật</h3>
-                    <div className="grid grid-cols-2 gap-4">
-                        {/* 1. Face ID */}
-                        <div>
-                            <SingleImageSlot
-                                label="Face ID"
-                                image={character.faceImage}
-                                onUpload={(img) => updateCharacter(character.id, { faceImage: img })}
-                                onDelete={() => updateCharacter(character.id, { faceImage: null })}
-                                onEdit={character.faceImage ? () => onEditImage(character.id, character.faceImage!, 'face') : undefined}
-                                subLabel="Gương mặt"
-                            />
-                        </div>
-                        {/* 2. Full Body */}
-                        <div>
-                            <SingleImageSlot
-                                label="Full Body"
-                                image={character.bodyImage}
-                                onUpload={(img) => updateCharacter(character.id, { bodyImage: img })}
-                                onDelete={() => updateCharacter(character.id, { bodyImage: null })}
-                                onEdit={character.bodyImage ? () => onEditImage(character.id, character.bodyImage!, 'body') : undefined}
-                                aspect="portrait"
-                                subLabel="Toàn thân"
-                            />
-                        </div>
-                    </div>
+                    <h3 className="text-sm font-bold text-gray-300 mb-2 uppercase tracking-wider">
+                        Character Sheet
+                        {character.sheetGenMode === 'sheet' && (
+                            <span className="ml-2 text-[10px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full font-normal normal-case">
+                                ✅ AI Generated
+                            </span>
+                        )}
+                    </h3>
+                    <SingleImageSlot
+                        label="Character Reference Sheet"
+                        image={character.characterSheet}
+                        onUpload={(img) => updateCharacter(character.id, { characterSheet: img, sheetGenMode: 'legacy' })}
+                        onDelete={() => updateCharacter(character.id, { characterSheet: null, sheetGenMode: undefined })}
+                        onEdit={character.characterSheet ? () => onEditImage(character.id, character.characterSheet!, 'sheet') : undefined}
+                        aspect="auto"
+                        subLabel="All angles: Front / Left / Right / Back"
+                    />
+                    {!character.characterSheet && (character.faceImage || character.bodyImage) && (
+                        <p className="text-[10px] text-yellow-500/70 mt-1 text-center italic">
+                            ⚠️ Using legacy Face/Body refs. Re-analyze to generate sheet.
+                        </p>
+                    )}
                 </div>
             </div>
         </Modal>

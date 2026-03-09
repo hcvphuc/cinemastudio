@@ -116,7 +116,8 @@ export const editImageWithMask = async (
     base64MaskData: string,
     editPrompt: string,
     aspectRatio: string = "1:1",
-    resolution: '1k' | '2k' | '4k' = '1k'
+    resolution: '1k' | '2k' | '4k' = '1k',
+    model: string = 'gemini-3-pro-image-preview'
 ): Promise<GeneratedImage> => {
     try {
         const ai = getAi(apiKey);
@@ -142,7 +143,7 @@ export const editImageWithMask = async (
         const cleanMask = base64MaskData.includes(',') ? base64MaskData.split(',')[1] : base64MaskData;
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-image-preview',
+            model: model,
             contents: {
                 parts: [
                     {
@@ -190,7 +191,8 @@ export const upscaleImage = async (
     base64ImageData: string,
     mimeType: string,
     aspectRatio: string = "1:1",
-    upscaleLevel: '1k' | '2k' | '4k' = '2k'
+    upscaleLevel: '1k' | '2k' | '4k' = '2k',
+    model: string = 'gemini-3-pro-image-preview'
 ): Promise<GeneratedImage> => {
     try {
         const ai = getAi(apiKey);
@@ -203,7 +205,7 @@ export const upscaleImage = async (
         };
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-image-preview',
+            model: model,
             contents: {
                 parts: [
                     {
@@ -246,14 +248,15 @@ export const expandImage = async (
     mimeType: string,
     direction: 'up' | 'down' | 'left' | 'right',
     aspectRatio: string = "1:1",
-    resolution: '1k' | '2k' | '4k' = '1k'
+    resolution: '1k' | '2k' | '4k' = '1k',
+    model: string = 'gemini-3-pro-image-preview'
 ): Promise<GeneratedImage> => {
     try {
         const ai = getAi(apiKey);
         const cleanImage = base64ImageData.includes(',') ? base64ImageData.split(',')[1] : base64ImageData;
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-image-preview',
+            model: model,
             contents: {
                 parts: [
                     {
@@ -296,12 +299,13 @@ export const applyStyleTransfer = async (
     styleImage: GeneratedImage,
     prompt: string,
     aspectRatio: string = "1:1",
-    resolution: '1k' | '2k' | '4k' = '1k'
+    resolution: '1k' | '2k' | '4k' = '1k',
+    model: string = 'gemini-3-pro-image-preview'
 ): Promise<GeneratedImage> => {
     try {
         const ai = getAi(apiKey);
         const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-image-preview',
+            model: model,
             contents: {
                 parts: [
                     {
@@ -350,13 +354,14 @@ export const compositeImages = async (
     objectImage: GeneratedImage,
     prompt: string,
     aspectRatio: string = "1:1",
-    resolution: '1k' | '2k' | '4k' = '1k'
+    resolution: '1k' | '2k' | '4k' = '1k',
+    model: string = 'gemini-3-pro-image-preview'
 ): Promise<GeneratedImage> => {
     return withRetry(async () => {
         const ai = getAi(apiKey);
         const fullPrompt = `Use the first image as the base/background. Take the main subject from the second image and composite it into the first image based on the following instructions: "${prompt}". Seamlessly blend the lighting, shadows, and art style to make the composition look natural.`;
         const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-image-preview',
+            model: model,
             contents: {
                 parts: [
                     {
@@ -442,14 +447,15 @@ export const generateImageFromImage = async (
     mimeType: string,
     prompt: string,
     aspectRatio: string = "1:1",
-    resolution: '1k' | '2k' | '4k' = '1k'
+    resolution: '1k' | '2k' | '4k' = '1k',
+    model: string = 'gemini-3-pro-image-preview'
 ): Promise<GeneratedImage> => {
     try {
         const ai = getAi(apiKey);
         const cleanImage = base64ImageData.includes(',') ? base64ImageData.split(',')[1] : base64ImageData;
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-image-preview',
+            model: model,
             contents: {
                 parts: [
                     {
@@ -492,7 +498,8 @@ export const tryOnOutfit = async (
     base64OutfitImage: string,
     base64MaskData: string | null,
     aspectRatio: string = "1:1",
-    resolution: '1k' | '2k' | '4k' = '1k'
+    resolution: '1k' | '2k' | '4k' = '1k',
+    model: string = 'gemini-3-pro-image-preview'
 ): Promise<GeneratedImage> => {
     try {
         const ai = getAi(apiKey);
@@ -529,7 +536,7 @@ export const tryOnOutfit = async (
         });
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-image-preview',
+            model: model,
             contents: { parts },
             config: {
                 imageConfig: {

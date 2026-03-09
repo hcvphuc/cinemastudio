@@ -53,6 +53,11 @@ export interface Character {
 
   // Model preference for Lora generation (Gemini or Gommo)
   preferredModel?: string; // 'gemini-3-pro-image-preview' | 'google_nano_banana_pro'
+  preferredVisionModel?: string; // Model for image analysis: 'auto' | 'imperial' | 'gemini' | 'groq'
+
+  // Character Sheet (Multi-View Reference)
+  characterSheet: string | null; // Full multi-view character sheet grid (4×2)
+  sheetGenMode?: 'legacy' | 'sheet'; // Track generation mode used
 
   // Separate Histories for different views
   masterEditHistory?: { id: string; image: string; prompt: string }[];

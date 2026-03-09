@@ -315,12 +315,16 @@ export const IMAGE_MODELS = [
     // ═══════════════════════════════════════════════════════════════
     // GEMINI DIRECT (requires Gemini API key)
     // ═══════════════════════════════════════════════════════════════
-    { value: 'gemini-3.1-flash-image-preview', label: '🔵 Gemini 3.1 Flash Image', provider: 'gemini', description: 'Gemini Direct - Latest image gen model', supportsEdit: true, supportsSubject: true },
-    { value: 'gemini-3-pro-image-preview', label: '🔵 Nano Banana Pro', provider: 'gemini', description: 'Gemini Direct - Via Google AI Studio API', supportsEdit: true, supportsSubject: true },
-    { value: 'gemini-2.5-flash-image', label: '🔵 Gemini 2.5 Flash Image', provider: 'gemini', description: 'Gemini Direct - Fast image gen', supportsEdit: true, supportsSubject: true },
-    { value: 'gemini-3.1-flash-image-1k', label: '🔵 Gemini 3.1 Flash Image 1K', provider: 'gemini', description: '1408×768 • $0.40/req (Vertex Key)', supportsEdit: true, supportsSubject: true },
-    { value: 'gemini-3.1-flash-image-2k', label: '🔵 Gemini 3.1 Flash Image 2K', provider: 'gemini', description: '2816×1536 • $0.55/req (Vertex Key)', supportsEdit: true, supportsSubject: true },
-    { value: 'gemini-3.1-flash-image-4k', label: '🔵 Gemini 3.1 Flash Image 4K', provider: 'gemini', description: '5632×3072 • $0.70/req (Vertex Key)', supportsEdit: true, supportsSubject: true },
+    { value: 'gemini-3-pro-image-preview', label: '🔵 Nano Banana Pro', provider: 'gemini', description: 'Gemini Direct - Best Quality', supportsEdit: true, supportsSubject: true },
+    { value: 'gemini-3.1-flash-image-preview', label: '🔵 Flash Image', provider: 'gemini', description: 'Gemini Direct - Fast & Free', supportsEdit: true, supportsSubject: true },
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🔴 VERTEX (Imperial Ultra) - Premium via vertex-key.com
+    // ═══════════════════════════════════════════════════════════════
+    { value: 'gemini-image-4k', label: '🔴 Gemini Image 4K', provider: 'imperial', description: 'Vertex - 5632×3072 - $0.50', supportsEdit: true, supportsSubject: true },
+    { value: 'gemini-image-2k', label: '🔴 Gemini Image 2K', provider: 'imperial', description: 'Vertex - 2816×1536 - $0.45', supportsEdit: true, supportsSubject: true },
+    { value: 'gemini-image-1k', label: '🔴 Gemini Image 1K', provider: 'imperial', description: 'Vertex - 1408×768 - $0.36', supportsEdit: true, supportsSubject: true },
+    { value: 'gemini-2.5-flash-image', label: '🔴 Gemini Flash Image', provider: 'imperial', description: 'Vertex - 1024² Fast - $0.25', supportsEdit: true, supportsSubject: true },
 
     // ═══════════════════════════════════════════════════════════════
     // GOMMO PROXY (requires Gommo credentials) - Actual API model IDs
@@ -352,13 +356,17 @@ export const IMAGE_MODELS = [
 ];
 
 export const SCRIPT_MODELS = [
-    { value: 'gemini-3-pro-preview|high', label: 'Gemini 3 Pro (High Reasoning)' },
-    { value: 'gemini-3-pro-preview|low', label: 'Gemini 3 Pro (Low Latency)' },
-    { value: 'gemini-2.5-flash|high', label: 'Gemini 3 Flash (Smart)' },
-    { value: 'gemini-2.5-flash|medium', label: 'Gemini 3 Flash (Balanced)' },
-    { value: 'gemini-2.5-flash|low', label: 'Gemini 3 Flash (Fast)' },
-    { value: 'gemini-2.5-flash|minimal', label: 'Gemini 3 Flash (Minimal Thinking)' },
-    { value: 'gemini-2.5-flash|none', label: 'Gemini 2.5 Flash (Legacy)' },
+    // Gemini Direct
+    { value: 'gemini-3-pro-preview|high', label: '🔵 Gemini 3 Pro (High Reasoning)' },
+    { value: 'gemini-3-pro-preview|low', label: '🔵 Gemini 3 Pro (Low Latency)' },
+    { value: 'gemini-2.5-flash|high', label: '🔵 Gemini 3 Flash (Smart)' },
+    { value: 'gemini-2.5-flash|medium', label: '🔵 Gemini 3 Flash (Balanced)' },
+    { value: 'gemini-2.5-flash|low', label: '🔵 Gemini 3 Flash (Fast)' },
+    { value: 'gemini-2.5-flash|minimal', label: '🔵 Gemini 3 Flash (Minimal Thinking)' },
+    { value: 'gemini-2.5-flash|none', label: '🔵 Gemini 2.5 Flash (Legacy)' },
+    // Imperial Ultra (Vertex) - Auto-routed via Smart Router
+    { value: 'imperial-auto|high', label: '🔴 Imperial Ultra (High Quality)' },
+    { value: 'imperial-auto|fast', label: '🔴 Imperial Ultra (Fast)' },
 ];
 
 export const ASPECT_RATIOS = [
@@ -423,6 +431,7 @@ export const INITIAL_STATE: ProjectState = {
         bodyImage: null,
         sideImage: null,
         backImage: null,
+        characterSheet: null,
         props: [
             { id: generateId(), name: '', image: null },
             { id: generateId(), name: '', image: null },

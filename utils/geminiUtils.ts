@@ -1,13 +1,54 @@
-import { GoogleGenAI } from "@google/genai";
+﻿import { GoogleGenAI } from "@google/genai";
+import {
+    isImperialUltraEnabled,
+    checkImperialHealth,
+    callImperialText,
+    callImperialImage,
+    callImperialVision,
+    getImperialKeySource,
+    getImageFallbackChain,
+} from './imperialUltraClient';
 
-// ═══════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // IMAGE CACHE - Avoids re-fetching same images during generation
-// ═══════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 const imageCache = new Map<string, { data: string; mimeType: string }>();
 const CACHE_MAX_SIZE = 20; // Reduced from 100 to limit memory usage
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutes (reduced from 30 min)
 const FETCH_TIMEOUT = 15000; // 15 second timeout for slow connections
 let cacheTimestamp = Date.now();
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// PROVIDER COOLDOWN SYSTEM
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+const providerCooldowns: Record<string, { until: number; reason: string }> = {};
+const COOLDOWN_RATE_LIMIT = 60000;   // 60s for rate limit errors
+const COOLDOWN_HARD_ERROR = 300000;  // 5min for hard errors
+
+function isProviderOnCooldown(provider: string): boolean {
+    const cd = providerCooldowns[provider];
+    if (!cd) return false;
+    if (Date.now() > cd.until) {
+        delete providerCooldowns[provider];
+        return false;
+    }
+    return true;
+}
+
+function setCooldown(provider: string, error: string): void {
+    const isRateLimit = error.includes('429') || error.includes('rate') || error.includes('quota');
+    providerCooldowns[provider] = {
+        until: Date.now() + (isRateLimit ? COOLDOWN_RATE_LIMIT : COOLDOWN_HARD_ERROR),
+        reason: error.substring(0, 100)
+    };
+    console.warn(`[SmartRouter] â³ ${provider} on cooldown for ${isRateLimit ? '60s' : '5min'}: ${error.substring(0, 80)}`);
+}
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// PROVIDER CACHE - Remembers which provider worked last
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+let cachedTextProvider: { provider: 'imperial' | 'gemini'; timestamp: number } | null = null;
+const PROVIDER_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Convert base64 data to a Blob URL to save memory.
@@ -35,7 +76,7 @@ const checkCacheExpiry = () => {
     if (Date.now() - cacheTimestamp > CACHE_TTL) {
         imageCache.clear();
         cacheTimestamp = Date.now();
-        console.log('[ImageCache] 🗑️ Cache cleared (TTL expired)');
+        console.log('[ImageCache] ðŸ—‘ï¸ Cache cleared (TTL expired)');
     }
 };
 
@@ -62,7 +103,7 @@ export const fixMimeType = (mimeType: string | undefined, urlOrFilename?: string
     }
 
     // Default fallback
-    console.warn(`[fixMimeType] ⚠️ Fixed invalid MIME: '${mimeType}' -> 'image/jpeg'`);
+    console.warn(`[fixMimeType] âš ï¸ Fixed invalid MIME: '${mimeType}' -> 'image/jpeg'`);
     return 'image/jpeg';
 };
 
@@ -88,7 +129,7 @@ export const safeGetImageData = async (imageStr: string): Promise<{ data: string
     // Check cache first
     checkCacheExpiry();
     if (imageCache.has(imageStr)) {
-        console.log('[ImageCache] ⚡ Cache hit');
+        console.log('[ImageCache] âš¡ Cache hit');
         return imageCache.get(imageStr)!;
     }
 
@@ -130,7 +171,7 @@ export const safeGetImageData = async (imageStr: string): Promise<{ data: string
                 else if (extension === 'webp') mimeType = 'image/webp';
                 else mimeType = 'image/png'; // Default fallback
 
-                console.warn(`[ImageCache] ⚠️ MIME type fix: '${blob.type}' -> '${mimeType}' for ${imageStr.substring(0, 50)}...`);
+                console.warn(`[ImageCache] âš ï¸ MIME type fix: '${blob.type}' -> '${mimeType}' for ${imageStr.substring(0, 50)}...`);
             }
             result = await new Promise((resolve) => {
                 const reader = new FileReader();
@@ -140,7 +181,7 @@ export const safeGetImageData = async (imageStr: string): Promise<{ data: string
                 });
                 reader.readAsDataURL(blob);
             });
-            console.log(`[ImageCache] 📥 Fetched in ${Date.now() - startTime}ms`);
+            console.log(`[ImageCache] ðŸ“¥ Fetched in ${Date.now() - startTime}ms`);
         }
 
         // Store in cache
@@ -168,14 +209,14 @@ export const preWarmImageCache = async (imageUrls: string[]): Promise<number> =>
 
     if (uniqueUrls.length === 0) return 0;
 
-    console.log(`[ImageCache] 🔥 Pre-warming cache with ${uniqueUrls.length} images...`);
+    console.log(`[ImageCache] ðŸ”¥ Pre-warming cache with ${uniqueUrls.length} images...`);
 
     const results = await Promise.allSettled(
         uniqueUrls.map(url => safeGetImageData(url))
     );
 
     const successCount = results.filter(r => r.status === 'fulfilled' && r.value !== null).length;
-    console.log(`[ImageCache] ✅ Pre-warmed ${successCount}/${uniqueUrls.length} images in ${Date.now() - startTime}ms`);
+    console.log(`[ImageCache] âœ… Pre-warmed ${successCount}/${uniqueUrls.length} images in ${Date.now() - startTime}ms`);
 
     return successCount;
 };
@@ -184,7 +225,7 @@ export const preWarmImageCache = async (imageUrls: string[]): Promise<number> =>
 export const clearImageCache = () => {
     imageCache.clear();
     cacheTimestamp = Date.now();
-    console.log('[ImageCache] 🗑️ Cache manually cleared');
+    console.log('[ImageCache] ðŸ—‘ï¸ Cache manually cleared');
 };
 
 // Get cache stats for debugging
@@ -195,6 +236,10 @@ export const getCacheStats = () => ({
     ageMinutes: Math.round((Date.now() - cacheTimestamp) / 60000)
 });
 
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// GEMINI DIRECT IMAGE GENERATION (original, unchanged)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
 export const callGeminiAPI = async (
     apiKey: string,
     prompt: string,
@@ -204,7 +249,7 @@ export const callGeminiAPI = async (
 ): Promise<string | null> => {
     const trimmedKey = apiKey?.trim();
     if (!trimmedKey) {
-        console.error('[Gemini Gen] ❌ No API key provided');
+        console.error('[Gemini Gen] âŒ No API key provided');
         return null;
     }
 
@@ -214,7 +259,7 @@ export const callGeminiAPI = async (
         finalModel = 'gemini-2.0-flash-preview-image-generation';
     }
 
-    console.log('[Gemini Gen] 🎨 Calling Gemini API...', {
+    console.log('[Gemini Gen] ðŸŽ¨ Calling Gemini API...', {
         model: finalModel,
         aspectRatio,
         hasContext: !!imageContext,
@@ -226,13 +271,13 @@ export const callGeminiAPI = async (
         const parts: any[] = [];
 
         if (imageContext) {
-            console.log('[Gemini Gen] 📎 Processing Reference Image...');
+            console.log('[Gemini Gen] ðŸ“Ž Processing Reference Image...');
             const contextData = await safeGetImageData(imageContext);
             if (contextData) {
-                console.log('[Gemini Gen] ✅ Reference image loaded:', contextData.mimeType);
+                console.log('[Gemini Gen] âœ… Reference image loaded:', contextData.mimeType);
                 parts.push({ inlineData: { data: contextData.data, mimeType: contextData.mimeType } });
             } else {
-                console.error('[Gemini Gen] ❌ Failed to load reference image!');
+                console.error('[Gemini Gen] âŒ Failed to load reference image!');
             }
         }
 
@@ -251,15 +296,15 @@ export const callGeminiAPI = async (
 
         const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (imagePart?.inlineData) {
-            console.log('[Gemini Gen] ✅ Image generated successfully!');
+            console.log('[Gemini Gen] âœ… Image generated successfully!');
             // Convert to Blob URL to save memory (from ~3MB base64 string to ~50 byte pointer)
             return base64ToBlobUrl(imagePart.inlineData.data, imagePart.inlineData.mimeType);
         }
 
-        console.error('[Gemini Gen] ❌ No image in response:', response);
+        console.error('[Gemini Gen] âŒ No image in response:', response);
         return null;
     } catch (err: any) {
-        console.error('[Gemini Gen] ❌ Error:', err.message, err);
+        console.error('[Gemini Gen] âŒ Error:', err.message, err);
         return null;
     }
 };
@@ -273,6 +318,10 @@ export interface TextGenerationResult {
     };
 }
 
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// SMART TEXT GENERATION â€” Imperial â†’ Gemini Direct
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
 export const callGeminiText = async (
     apiKey: string,
     prompt: string,
@@ -280,10 +329,53 @@ export const callGeminiText = async (
     model: string = 'gemini-2.5-flash',
     jsonMode: boolean = false
 ): Promise<string> => {
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // SMART ROUTING: Try Imperial Ultra first, then Gemini Direct
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+    // Check cached provider first
+    if (cachedTextProvider && Date.now() - cachedTextProvider.timestamp < PROVIDER_CACHE_TTL) {
+        const cached = cachedTextProvider.provider;
+        if (cached === 'imperial' && isImperialUltraEnabled() && !isProviderOnCooldown('imperial')) {
+            try {
+                console.log('[SmartText] âš¡ Using cached provider: Imperial Ultra');
+                const result = await callImperialText(prompt, {
+                    systemPrompt,
+                    jsonMode,
+                });
+                return result;
+            } catch (error: any) {
+                setCooldown('imperial', error.message);
+                cachedTextProvider = null;
+            }
+        }
+    }
+
+    // Try Imperial Ultra (if enabled and healthy)
+    if (isImperialUltraEnabled() && !isProviderOnCooldown('imperial')) {
+        try {
+            const isHealthy = await checkImperialHealth();
+            if (isHealthy) {
+                console.log('[SmartText] ðŸ‘‘ Trying Imperial Ultra...');
+                const result = await callImperialText(prompt, {
+                    systemPrompt,
+                    jsonMode,
+                });
+                cachedTextProvider = { provider: 'imperial', timestamp: Date.now() };
+                return result;
+            }
+        } catch (error: any) {
+            setCooldown('imperial', error.message);
+            console.warn(`[SmartText] âš ï¸ Imperial failed: ${error.message}, falling back to Gemini...`);
+        }
+    }
+
+    // Fallback: Gemini Direct (original logic)
     const trimmedKey = apiKey?.trim();
     if (!trimmedKey) throw new Error('Missing API Key');
 
     try {
+        console.log('[SmartText] ðŸ’Ž Using Gemini Direct');
         const ai = new GoogleGenAI({ apiKey: trimmedKey });
 
         const response = await ai.models.generateContent({
@@ -313,15 +405,20 @@ export const callGeminiText = async (
 
         const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!text) {
-            console.warn('[Gemini Text] ⚠️ Empty response text (check candidate blocked?)');
+            console.warn('[Gemini Text] âš ï¸ Empty response text (check candidate blocked?)');
             return '';
         }
+        cachedTextProvider = { provider: 'gemini', timestamp: Date.now() };
         return text;
     } catch (err: any) {
-        console.error('[Gemini Text] ❌ Error:', err.message);
+        console.error('[Gemini Text] âŒ Error:', err.message);
         throw err;
     }
 };
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// SMART VISION â€” Imperial â†’ Gemini Direct
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 export const callGeminiVisionReasoning = async (
     apiKey: string,
@@ -329,10 +426,31 @@ export const callGeminiVisionReasoning = async (
     images: { data: string; mimeType: string }[],
     model: string = 'gemini-2.5-flash', // Gemini 3 Standard
 ): Promise<string> => {
+    // Try Imperial Ultra first (if enabled and not on cooldown)
+    if (isImperialUltraEnabled() && !isProviderOnCooldown('imperial')) {
+        try {
+            const isHealthy = await checkImperialHealth();
+            if (isHealthy) {
+                console.log('[SmartVision] ðŸ‘‘ Trying Imperial Ultra Vision...');
+                const result = await callImperialVision(prompt, images, undefined, {
+                    jsonMode: true,
+                    maxTokens: 4096,
+                    temperature: 0.4
+                });
+                return result;
+            }
+        } catch (error: any) {
+            setCooldown('imperial', error.message);
+            console.warn(`[SmartVision] âš ï¸ Imperial failed: ${error.message}, falling back to Gemini...`);
+        }
+    }
+
+    // Fallback: Gemini Direct (original logic)
     const trimmedKey = apiKey?.trim();
     if (!trimmedKey) throw new Error('Missing API Key');
 
     try {
+        console.log('[SmartVision] ðŸ’Ž Using Gemini Direct Vision');
         const ai = new GoogleGenAI({ apiKey: trimmedKey });
 
         const parts: any[] = [{ text: prompt }];
@@ -350,7 +468,7 @@ export const callGeminiVisionReasoning = async (
         const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
         return text || '';
     } catch (err: any) {
-        console.error('[Gemini Vision] ❌ Reasoning Error:', err.message);
+        console.error('[Gemini Vision] âŒ Reasoning Error:', err.message);
         throw err;
     }
 };
@@ -360,7 +478,8 @@ import { GommoAI, urlToBase64 } from './gommoAI';
 import { IMAGE_MODELS } from './appConstants';
 
 /**
- * Character Image API with Gemini/Gommo routing
+ * Character Image API with Smart Routing
+ * Priority: Imperial Ultra â†’ Gemini Direct â†’ Gommo
  * Used for Lora generation (Face ID, Body sheets)
  */
 export const callCharacterImageAPI = async (
@@ -373,17 +492,102 @@ export const callCharacterImageAPI = async (
 ): Promise<string | null> => {
     // Determine provider from model
     const model = IMAGE_MODELS.find(m => m.value === imageModel);
-    const provider = model?.provider || 'gemini';
+    let provider = model?.provider || 'gemini';
+
+    // Force 'imperial' for all vertex-key.com prefixed models
+    const vertexPrefixes = ['gem/', 'imy/', 'ima/', 'imi/', 'imr/', 'imp/'];
+    if (vertexPrefixes.some(p => imageModel.startsWith(p)) || imageModel.startsWith('gemini-image-')) {
+        provider = 'imperial';
+    }
+
+    // If it's a Google model being used via Gommo Proxy
+    if (provider === 'google' && gommoCredentials?.domain && gommoCredentials?.accessToken) {
+        provider = 'gommo';
+    }
 
     console.log(`[CharacterGen] Provider: ${provider}, Model: ${imageModel}`);
 
-    // ═══════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ðŸ‘‘ IMPERIAL ULTRA PATH - Premium Character Generation
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    if (provider === 'imperial') {
+        console.log('[CharacterGen] â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”');
+        console.log('[CharacterGen] ðŸ‘‘ Using IMPERIAL ULTRA provider');
+
+        if (isImperialUltraEnabled()) {
+            const isHealthy = await checkImperialHealth();
+            if (isHealthy) {
+                // Auto-fallback: try primary model â†’ then fallback tiers
+                const fallbackChain = getImageFallbackChain(imageModel);
+                const modelsToTry = [imageModel, ...fallbackChain];
+                const errors: string[] = [];
+
+                for (let i = 0; i < modelsToTry.length; i++) {
+                    const currentModel = modelsToTry[i];
+                    const tierLabel = i === 0 ? '(primary)' : `(fallback #${i})`;
+
+                    try {
+                        const keySource = getImperialKeySource();
+                        console.log(`[CharacterGen] ðŸ‘‘ Imperial Character Request ${tierLabel}:`);
+                        console.log(`  â”œâ”€ Model: ${currentModel}`);
+                        console.log(`  â”œâ”€ Key Source: ${keySource.toUpperCase()}`);
+                        console.log(`  â”œâ”€ Aspect Ratio: ${aspectRatio}`);
+                        console.log(`  â””â”€ Prompt: ${prompt.substring(0, 60)}...`);
+
+                        const result = await callImperialImage(prompt, {
+                            model: currentModel,
+                            aspectRatio: aspectRatio,
+                            imageContext: imageContext
+                        });
+
+                        if (result.base64) {
+                            if (i > 0) console.log(`[CharacterGen] ðŸ‘‘ âœ… Fallback SUCCESS with ${currentModel}`);
+                            else console.log('[CharacterGen] ðŸ‘‘ âœ… Imperial character generated (base64)');
+                            console.log('[CharacterGen] â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”');
+                            return result.base64;
+                        } else if (result.url) {
+                            if (i > 0) console.log(`[CharacterGen] ðŸ‘‘ âœ… Fallback SUCCESS with ${currentModel}`);
+                            else console.log('[CharacterGen] ðŸ‘‘ âœ… Imperial character generated (URL)');
+                            const base64 = await urlToBase64(result.url);
+                            console.log('[CharacterGen] â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”');
+                            return base64;
+                        }
+                        throw new Error('No image in Imperial response');
+                    } catch (error: any) {
+                        const errMsg = error.message || String(error);
+                        errors.push(`${currentModel}: ${errMsg}`);
+
+                        const isRetryable = errMsg.includes('429') || errMsg.includes('503') ||
+                            errMsg.includes('502') || errMsg.includes('queue') ||
+                            errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('overloaded') ||
+                            errMsg.includes('rate') || errMsg.includes('capacity');
+
+                        if (isRetryable && i < modelsToTry.length - 1) {
+                            console.warn(`[CharacterGen] âš ï¸ ${currentModel} failed (${errMsg.substring(0, 60)}) â†’ trying next tier...`);
+                            continue;
+                        }
+
+                        console.error('[CharacterGen] ðŸ‘‘ âŒ Imperial failed:', errMsg);
+                        console.log('[CharacterGen] ðŸ“‰ All tiers exhausted, falling back to Gemini/Gommo...');
+                    }
+                }
+            } else {
+                console.warn('[CharacterGen] âš ï¸ Imperial Ultra unhealthy, falling back...');
+            }
+        } else {
+            console.warn('[CharacterGen] âš ï¸ Imperial Ultra disabled, falling back...');
+        }
+        console.log('[CharacterGen] â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”');
+        // Fall through to Gemini/Gommo
+    }
+
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // GOMMO PATH
-    // ═══════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     if (provider === 'gommo') {
         // STRICT CHECK: Only use Gommo if provider is explicitly Gommo
         if (gommoCredentials?.domain && gommoCredentials?.accessToken) {
-            console.log('[CharacterGen] 🟡 Using GOMMO provider');
+            console.log('[CharacterGen] ðŸŸ¡ Using GOMMO provider');
             try {
                 const client = new GommoAI(gommoCredentials.domain, gommoCredentials.accessToken);
                 const gommoRatio = GommoAI.convertRatio(aspectRatio);
@@ -414,7 +618,7 @@ export const callCharacterImageAPI = async (
 
                 // Convert CDN URL to blob URL for memory efficiency
                 const base64Image = await urlToBase64(cdnUrl);
-                console.log('[CharacterGen] ✅ Gommo image generated successfully');
+                console.log('[CharacterGen] âœ… Gommo image generated successfully');
                 // Convert base64 dataURI to blob URL to save RAM
                 if (base64Image.startsWith('data:')) {
                     const match = base64Image.match(/^data:([^;]+);base64,(.+)$/);
@@ -424,24 +628,25 @@ export const callCharacterImageAPI = async (
                 }
                 return base64Image;
             } catch (error: any) {
-                console.error('[CharacterGen] ❌ Gommo error:', error.message);
+                console.error('[CharacterGen] âŒ Gommo error:', error.message);
                 throw error;
             }
         } else {
             // Gommo selected but no creds
-            console.error('[CharacterGen] ❌ Gommo model selected but credentials missing!');
-            throw new Error('Gommo credentials chưa được cấu hình. Vào Profile → Gommo AI để nhập Domain và Access Token.');
+            console.error('[CharacterGen] âŒ Gommo model selected but credentials missing!');
+            throw new Error('Gommo credentials chÆ°a Ä‘Æ°á»£c cáº¥u hÃ¬nh. VÃ o Profile â†’ Gommo AI Ä‘á»ƒ nháº­p Domain vÃ  Access Token.');
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // GEMINI PATH (Default or fallback)
-    // ═══════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     if (!apiKey?.trim()) {
-        console.error('[CharacterGen] ❌ No API key');
+        console.error('[CharacterGen] âŒ No API key');
         return null;
     }
 
-    console.log('[CharacterGen] 🔵 Using GEMINI provider');
+    console.log('[CharacterGen] ðŸ”µ Using GEMINI provider');
     return callGeminiAPI(apiKey, prompt, aspectRatio, imageModel, imageContext);
 };
+

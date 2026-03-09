@@ -9,24 +9,9 @@ export default defineConfig(({ mode }) => {
       port: 3000,
       host: '0.0.0.0',
       proxy: {
-        // Proxy vertex-key.com requests to avoid CORS in local dev
         '/api/proxy/imperial': {
-          target: 'https://vertex-key.com',
+          target: 'http://localhost:3001',
           changeOrigin: true,
-          rewrite: (path: string) => path.replace('/api/proxy/imperial', '/api/v1'),
-          timeout: 300000, // 5 min for image gen/edit
-          configure: (proxy: any) => {
-            proxy.on('proxyReq', (proxyReq: any) => {
-              proxyReq.socket?.setTimeout(300000);
-            });
-          }
-        },
-        // Proxy Gemini API requests to avoid browser API key restrictions
-        '/api/proxy/gemini': {
-          target: 'https://generativelanguage.googleapis.com',
-          changeOrigin: true,
-          rewrite: (path: string) => path.replace('/api/proxy/gemini', ''),
-          timeout: 300000,
         },
       },
     },

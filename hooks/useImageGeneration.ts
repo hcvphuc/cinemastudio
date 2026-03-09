@@ -8,11 +8,17 @@ import {
 } from '../constants/presets';
 import { DIRECTOR_PRESETS, DirectorCategory } from '../constants/directors';
 import { getPresetById } from '../utils/scriptPresets';
-import { callImperialImage, callImperialImageEdit, getImageFallbackChain, isImperialUltraEnabled, getImperialApiKey } from '../utils/imperialUltraClient';
 import { uploadImageToSupabase, syncUserStatsToCloud } from '../utils/storageUtils';
 import { safeGetImageData, callGeminiVisionReasoning, preWarmImageCache, fixMimeType, base64ToBlobUrl } from '../utils/geminiUtils';
 import { GommoAI, urlToBase64 } from '../utils/gommoAI';
 import { IMAGE_MODELS } from '../utils/appConstants';
+import {
+    isImperialUltraEnabled,
+    checkImperialHealth,
+    callImperialImage,
+    getImperialKeySource,
+    getImageFallbackChain,
+} from '../utils/imperialUltraClient';
 import { normalizePrompt, normalizePromptAsync, formatNormalizationLog, needsNormalization, containsVietnamese } from '../utils/promptNormalizer';
 import { recordPrompt, approvePrompt, getSuggestedKeywords } from '../utils/dopLearning';
 import { analyzeSceneContinuity, extractCharacterState } from '../utils/dopIntelligence';
@@ -35,6 +41,11 @@ const cleanPromptForImageGen = (prompt: string): string => {
 // Helper: Determine which provider to use based on model ID
 const getProviderFromModel = (modelId: string): 'gemini' | 'gommo' | 'imperial' => {
     const model = IMAGE_MODELS.find(m => m.value === modelId);
+    // Force 'imperial' for vertex-key.com model prefixes
+    const vertexPrefixes = ['gem/', 'imy/', 'ima/', 'imi/', 'imr/', 'imp/'];
+    if (vertexPrefixes.some(p => modelId.startsWith(p)) || modelId.startsWith('gemini-image-') || modelId === 'gemini-2.5-flash-image') {
+        return 'imperial';
+    }
     return (model?.provider as 'gemini' | 'gommo' | 'imperial') || 'gemini';
 };
 
@@ -247,6 +258,111 @@ export function useImageGeneration(
         });
 
         // ═══════════════════════════════════════════════════════════════
+        // 👑 IMPERIAL ULTRA PATH: Premium via vertex-key.com
+        // ═══════════════════════════════════════════════════════════════
+        if (provider === 'imperial') {
+            console.log('[ImageGen] 🔴 Using IMPERIAL ULTRA provider');
+
+            if (!isImperialUltraEnabled()) {
+                console.warn('[ImageGen] ⚠️ Imperial Ultra not enabled, falling back to Gemini...');
+                // Fall through to Gemini path below
+            } else {
+                const isHealthy = await checkImperialHealth();
+                if (!isHealthy) {
+                    console.warn('[ImageGen] ⚠️ Imperial Ultra unhealthy, falling back to Gemini...');
+                } else {
+                    // Get fallback chain for the selected model
+                    const fallbackChain = getImageFallbackChain(model);
+                    const modelsToTry = [model, ...fallbackChain];
+
+                    for (let i = 0; i < modelsToTry.length; i++) {
+                        const currentModel = modelsToTry[i];
+                        const tierLabel = i === 0 ? '(primary)' : `(fallback #${i})`;
+
+                        try {
+                            const keySource = getImperialKeySource();
+                            console.log(`[ImageGen] 👑 Imperial Request ${tierLabel}:`);
+                            console.log(`  ├─ Model: ${currentModel}`);
+                            console.log(`  ├─ Key Source: ${keySource.toUpperCase()}`);
+                            console.log(`  └─ Aspect Ratio: ${aspectRatio}`);
+
+                            // Extract reference image from parts if available
+                            let imageContext: string | null = null;
+                            if (parts.length > 0 && parts[0].inlineData?.data) {
+                                imageContext = `data:${parts[0].inlineData.mimeType};base64,${parts[0].inlineData.data}`;
+                            }
+
+                            const result = await callImperialImage(prompt, {
+                                model: currentModel,
+                                aspectRatio: aspectRatio,
+                                imageContext: imageContext
+                            });
+
+                            if (result.base64) {
+                                console.log(`[ImageGen] 👑 ✅ Imperial image generated ${tierLabel} (base64)`);
+                                return { imageUrl: base64ToBlobUrl(result.base64.split(',').pop() || result.base64, 'image/png') };
+                            } else if (result.url) {
+                                console.log(`[ImageGen] 👑 ✅ Imperial image generated ${tierLabel} (URL)`);
+                                const base64 = await urlToBase64(result.url);
+                                if (base64.startsWith('data:')) {
+                                    const match = base64.match(/^data:([^;]+);base64,(.+)$/);
+                                    if (match) {
+                                        return { imageUrl: base64ToBlobUrl(match[2], match[1]) };
+                                    }
+                                }
+                                return { imageUrl: base64 };
+                            }
+                            throw new Error('No image in Imperial response');
+                        } catch (error: any) {
+                            const errMsg = error.message || String(error);
+                            const isRetryable = errMsg.includes('429') || errMsg.includes('503') ||
+                                errMsg.includes('502') || errMsg.includes('queue') ||
+                                errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('overloaded');
+
+                            if (isRetryable && i < modelsToTry.length - 1) {
+                                console.warn(`[ImageGen] ⚠️ ${currentModel} failed → trying next tier...`);
+                                continue;
+                            }
+
+                            console.error(`[ImageGen] 👑 ❌ Imperial all tiers exhausted: ${errMsg}`);
+                            // Fall through to Gemini
+                            break;
+                        }
+                    }
+
+                    console.log('[ImageGen] 📉 Imperial failed, falling back to Gemini...');
+                }
+            }
+
+            // Fall through: If imperial failed or disabled, use Gemini with API key
+            if (!apiKey) {
+                throw new Error('Imperial Ultra không khả dụng và không có Gemini API Key để fallback.');
+            }
+            console.log('[ImageGen] 🔵 Fallback to GEMINI from Imperial');
+            const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+            const fullParts: any[] = [];
+            if (prompt) fullParts.push({ text: prompt });
+            fullParts.push(...parts);
+
+            const response = await withRetry(async () => {
+                return await ai.models.generateContent({
+                    model: 'gemini-3-pro-image-preview',
+                    contents: [{ parts: fullParts }],
+                    config: {
+                        responseModalities: ["IMAGE"],
+                        imageConfig: { aspectRatio: aspectRatio || "16:9" }
+                    },
+                });
+            }, 'ImageGeneration-ImperialFallback', 3);
+
+            const imagePart = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData);
+            if (imagePart?.inlineData) {
+                return { imageUrl: base64ToBlobUrl(imagePart.inlineData.data, imagePart.inlineData.mimeType) };
+            }
+            throw new Error('Không nhận được ảnh từ cả Imperial lẫn Gemini fallback.');
+        }
+
+        // ═══════════════════════════════════════════════════════════════
         // GOMMO PATH: Supports subjects array for Face ID references
         // ═══════════════════════════════════════════════════════════════
         if (provider === 'gommo' && gommoCredentials?.domain && gommoCredentials?.accessToken) {
@@ -332,59 +448,6 @@ export function useImageGeneration(
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // IMPERIAL PATH: Vertex Key proxy (vertex-key.com)
-        // ═══════════════════════════════════════════════════════════════
-        if (provider === 'imperial') {
-            console.log('[ImageGen] 🟣 Using IMPERIAL (Vertex Key) provider');
-            const imperialKey = getImperialApiKey();
-            if (!imperialKey) {
-                throw new Error('Vertex Key chưa được cấu hình. Vào Settings → nhập Vertex Key (vai-xxx).');
-            }
-
-            // Try with fallback chain
-            const fallbackChain = getImageFallbackChain(model);
-            const modelsToTry = [model, ...fallbackChain];
-
-            let lastError: Error | null = null;
-            for (const currentModel of modelsToTry) {
-                try {
-                    console.log(`[ImageGen] 🟣 Trying Imperial model: ${currentModel}`);
-                    const hasInputImages = parts.length > 0;
-
-                    let imageUrl: string;
-                    if (hasInputImages) {
-                        // Image edit path — extract base64 from first part
-                        const firstPart = parts[0];
-                        const base64Data = firstPart.inlineData?.data || '';
-                        const mime = firstPart.inlineData?.mimeType || 'image/png';
-                        imageUrl = await callImperialImageEdit(
-                            base64Data, mime, prompt, undefined,
-                            { model: currentModel, apiKey: imperialKey }
-                        );
-                    } else {
-                        // Text-to-image path
-                        imageUrl = await callImperialImage(prompt, {
-                            model: currentModel,
-                            aspectRatio: aspectRatio,
-                            apiKey: imperialKey,
-                        });
-                    }
-
-                    return { imageUrl };
-                } catch (error: any) {
-                    console.warn(`[ImageGen] 🟣 Imperial model ${currentModel} failed:`, error.message);
-                    lastError = error;
-                    // Continue to next model in fallback chain
-                    if (error.message.includes('429') || error.message.includes('503') || error.message.includes('502')) {
-                        continue;
-                    }
-                    break; // Non-retryable error
-                }
-            }
-            throw lastError || new Error('Imperial image generation failed - all models exhausted');
-        }
-
-        // ═══════════════════════════════════════════════════════════════
         // GEMINI PATH: Full multi-modal generation with image references
         // ═══════════════════════════════════════════════════════════════
         // Use Gemini API for all Gemini-provider models
@@ -405,35 +468,18 @@ export function useImageGeneration(
             if (prompt) fullParts.push({ text: prompt }); // Text FIRST per docs
             fullParts.push(...parts); // Then all image references
 
-            // Auto-detect resolution from flash-image model names
-            let effectiveImageSize = imageSize || '1K';
-            if (model.includes('flash-image-4k')) effectiveImageSize = '4K';
-            else if (model.includes('flash-image-2k')) effectiveImageSize = '2K';
-            else if (model.includes('flash-image-1k')) effectiveImageSize = '1K';
-
-            // Map vertex-key model IDs to actual Google Gemini model IDs
-            // vertex-key uses suffixed names (1k/2k/4k) but Google has a single model
-            const GEMINI_MODEL_MAP: Record<string, string> = {
-                'gemini-3.1-flash-image-1k': 'gemini-3.1-flash-image-preview',
-                'gemini-3.1-flash-image-2k': 'gemini-3.1-flash-image-preview',
-                'gemini-3.1-flash-image-4k': 'gemini-3.1-flash-image-preview',
-                'gemini-3-pro-image': 'gemini-3-pro-image-preview',
-                'gemini-2.5-flash-image': 'gemini-2.5-flash-image',
-            };
-            const effectiveModel = GEMINI_MODEL_MAP[model] || model;
-
-            console.log(`[ImageGen] Generating with model: ${model} → ${effectiveModel}, resolution: ${effectiveImageSize}, aspectRatio: ${aspectRatio}, parts: ${fullParts.length}`);
+            console.log(`[ImageGen] Generating with resolution: ${imageSize}, aspectRatio: ${aspectRatio}, parts: ${fullParts.length}`);
 
             // Wrap API call with retry for transient errors (500, 503)
             const response = await withRetry(async () => {
                 return await ai.models.generateContent({
-                    model: effectiveModel,
+                    model: model,
                     contents: [{ parts: fullParts }],
                     config: {
                         responseModalities: ["IMAGE"], // Enforce Image output
                         imageConfig: {
                             aspectRatio: aspectRatio || "16:9",
-                            imageSize: effectiveImageSize || '1K' // Pass resolution to API
+                            imageSize: imageSize || '1K' // Pass resolution to API
                         }
                     },
                 });
@@ -554,7 +600,10 @@ export function useImageGeneration(
             }
 
 
-            const isHighRes = (currentState.imageModel || 'gemini-3-pro-image-preview') === 'gemini-3-pro-image-preview';
+            const modelToUseForRefs = currentState.imageModel || 'gemini-3-pro-image-preview';
+            const modelInfoForRefs = IMAGE_MODELS.find(m => m.value === modelToUseForRefs);
+            const isHighRes = modelToUseForRefs === 'gemini-3-pro-image-preview';
+            const supportsVisualRefs = modelInfoForRefs?.supportsSubject !== false;
 
             // --- REASONING STEP (Refinement/Edit Mode) ---
             // If we have a Base Image (Edit Mode) and a Command, we use "Gemini 3 Reasoning" to plan the edit first.
@@ -1762,7 +1811,7 @@ IGNORE any prior text descriptions if they conflict with this visual DNA.` });
                 userApiKey,
                 modelToUse,
                 currentState.aspectRatio,
-                isHighRes ? parts : [],
+                supportsVisualRefs ? parts : [], // FIXED: Was hardcoded to isHighRes (Pro only) — now sends refs for ALL models that support subjects (including Flash Image)
                 currentState.resolution || '1K',
                 { domain: currentState.gommoDomain || '', accessToken: currentState.gommoAccessToken || '' }
             );

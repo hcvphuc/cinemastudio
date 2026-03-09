@@ -230,6 +230,56 @@ import { saveCookies, autoGenerate } from './puppeteer-genyu.js';
 app.post('/api/save-cookies', saveCookies);
 app.post('/api/genyu/auto-generate', autoGenerate);
 
+// ==================== IMPERIAL ULTRA PROXY (vertex-key.com) ====================
+// Proxy all /api/proxy/imperial/* → vertex-key.com/api/*
+// Handles: /v1/chat/completions, /v1/images/generations, /v1/models, /embeddings
+app.all(/^\/api\/proxy\/imperial\/(.*)/, async (req, res) => {
+    const path = req.params[0]; // e.g. "v1/chat/completions"
+    const targetUrl = `https://vertex-key.com/api/${path}`;
+
+    console.log(`[Imperial Proxy] ${req.method} /${path}`);
+
+    try {
+        // Forward Authorization header from client
+        const headers = {
+            'Content-Type': 'application/json',
+        };
+
+        if (req.headers.authorization) {
+            headers['Authorization'] = req.headers.authorization;
+        }
+
+        const fetchOptions = {
+            method: req.method,
+            headers,
+        };
+
+        // Only add body for non-GET requests
+        if (req.method !== 'GET' && req.body) {
+            fetchOptions.body = JSON.stringify(req.body);
+        }
+
+        const response = await fetch(targetUrl, fetchOptions);
+
+        // Forward status code
+        if (!response.ok) {
+            const errorData = await response.text().catch(() => '');
+            console.error(`[Imperial Proxy] ❌ ${response.status}: ${errorData.substring(0, 200)}`);
+            return res.status(response.status).json({
+                error: `Upstream error (${response.status})`,
+                details: errorData.substring(0, 500)
+            });
+        }
+
+        const data = await response.json();
+        console.log(`[Imperial Proxy] ✅ ${req.method} /${path} OK`);
+        res.json(data);
+    } catch (error) {
+        console.error('[Imperial Proxy] ❌ Error:', error.message);
+        res.status(502).json({ error: `Imperial proxy error: ${error.message}` });
+    }
+});
+
 // ==================== GOOGLE LABS PROXY ====================
 app.post('/api/proxy/genyu/image', async (req, res) => {
     try {

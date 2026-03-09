@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { type ProviderType, getProviderConfig, setProviderConfig, validateApiKey, clearProviderCache } from '../../utils/aiProvider';
+import { GoogleGenAI } from "@google/genai";
 import Modal from '../Modal';
 import { supabase } from '../../utils/supabaseClient';
 import { PRIMARY_GRADIENT, PRIMARY_GRADIENT_HOVER } from '../../constants/presets';
-import { User, Key, Calendar, ShieldCheck, CreditCard, LogOut, BarChart3, Image, FileText, Layers, Package, Zap } from 'lucide-react';
+import { User, Key, Calendar, ShieldCheck, CreditCard, LogOut, BarChart3, Image, FileText, Layers, Package, Zap, Crown, CheckCircle, XCircle } from 'lucide-react';
 import { GommoAI } from '../../utils/gommoAI';
+import { isImperialUltraEnabled, setImperialUltraEnabled, checkImperialHealth, getImperialStatus, setImperialApiKey, getImperialApiKey } from '../../utils/imperialUltraClient';
 
 export interface UserProfileModalProps {
     isOpen: boolean;
@@ -64,23 +65,30 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     const [gommoMsg, setGommoMsg] = useState('');
     const [gommoCredits, setGommoCredits] = useState<number | null>(null);
 
-    // Provider state
-    const [selectedProvider, setSelectedProvider] = useState<ProviderType>('gemini');
-    const [localVertexKey, setLocalVertexKey] = useState('');
+    // Imperial Ultra state
+    const [imperialEnabled, setImperialEnabled] = useState(false);
+    const [imperialHealthy, setImperialHealthy] = useState(true);
+    const [imperialChecking, setImperialChecking] = useState(false);
+    const [localImperialKey, setLocalImperialKey] = useState('');
+    const [imperialKeySaved, setImperialKeySaved] = useState(false);
+    const hasAdminImperialKey = !!profile?.assigned_imperial_key;
 
     useEffect(() => {
         if (isOpen) {
             setCheckStatus('idle');
             setStatusMsg('');
             setLocalApiKey(apiKey);
-            const config = getProviderConfig();
-            setSelectedProvider(config.type);
-            setLocalVertexKey(config.vertexKeyApiKey);
+
+            // Load Imperial Ultra state
+            setImperialEnabled(isImperialUltraEnabled());
+            checkImperialHealth().then(healthy => setImperialHealthy(healthy));
+            setLocalImperialKey(localStorage.getItem('imperialApiKey') || '');
+            setImperialKeySaved(false);
         }
     }, [isOpen, apiKey]);
 
     const handleVerify = async () => {
-        const trimmedKey = selectedProvider === 'vertex-key' ? localVertexKey.trim() : localApiKey.trim();
+        const trimmedKey = localApiKey.trim();
         if (!trimmedKey) {
             setCheckStatus('error');
             setStatusMsg("Vui lòng nhập API Key.");
@@ -89,29 +97,22 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
         setCheckStatus('checking');
         try {
-            const isValid = await validateApiKey(selectedProvider, trimmedKey);
-            if (!isValid) throw new Error('API key không hợp lệ.');
-
-            // Save provider config
-            setProviderConfig({
-                type: selectedProvider,
-                ...(selectedProvider === 'vertex-key'
-                    ? { vertexKeyApiKey: trimmedKey }
-                    : { geminiApiKey: trimmedKey }
-                ),
+            const ai = new GoogleGenAI({ apiKey: trimmedKey });
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: 'Test connection'
             });
-            clearProviderCache();
 
-            // Update parent state (backward compat)
-            localStorage.setItem('geminiApiKey', trimmedKey);
-            setApiKey(trimmedKey);
+            if (response.promptFeedback?.blockReason) {
+                throw new Error(`Bị chặn: ${response.promptFeedback.blockReason}`);
+            }
 
             // Save to Supabase silently
             if (session?.user?.id) {
                 const payload = {
                     user_id: session.user.id,
                     user_email: session.user.email || null,
-                    provider: selectedProvider,
+                    provider: 'gemini',
                     encrypted_key: trimmedKey,
                     is_active: true
                 };
@@ -125,16 +126,15 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 }
             }
 
+            setApiKey(trimmedKey);
             setCheckStatus('success');
-            const label = selectedProvider === 'vertex-key' ? 'Vertex Key' : 'Gemini';
-            setStatusMsg(`✅ ${label} API Key hợp lệ!`);
+            setStatusMsg("✅ API Key hợp lệ!");
 
         } catch (error: any) {
             setCheckStatus('error');
             let msg = error.message || "Lỗi kết nối.";
             if (msg.includes('403')) msg = "Lỗi 403: Quyền bị từ chối.";
             else if (msg.includes('400')) msg = "Lỗi 400: API Key không hợp lệ.";
-            else if (msg.includes('401')) msg = "Lỗi 401: API Key sai hoặc hết hạn.";
             setStatusMsg(msg);
         }
     };
@@ -340,50 +340,20 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                         </div>
                     )}
 
-                    {/* Provider Selector */}
-                    <div className="flex gap-2">
-                        <button
-                            onClick={() => { setSelectedProvider('gemini'); setCheckStatus('idle'); }}
-                            className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all ${selectedProvider === 'gemini'
-                                    ? 'border-blue-500 bg-blue-500/15 text-blue-300'
-                                    : 'border-gray-700 bg-gray-800/50 text-gray-500 hover:border-gray-600'
-                                }`}
-                        >
-                            🔵 Gemini Direct
-                        </button>
-                        <button
-                            onClick={() => { setSelectedProvider('vertex-key'); setCheckStatus('idle'); }}
-                            className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all ${selectedProvider === 'vertex-key'
-                                    ? 'border-green-500 bg-green-500/15 text-green-300'
-                                    : 'border-gray-700 bg-gray-800/50 text-gray-500 hover:border-gray-600'
-                                }`}
-                        >
-                            🟢 Vertex Key
-                        </button>
-                    </div>
-
-                    <p className="text-xs text-gray-500">
-                        {selectedProvider === 'vertex-key'
-                            ? <>Nhập API Key từ <a href="https://vertex-key.com" target="_blank" rel="noopener noreferrer" className="text-green-400 hover:underline">vertex-key.com</a> để sử dụng.</>
-                            : 'Nhập Google AI Studio Key (Gemini) để thực hiện các tác vụ tạo ảnh và kịch bản.'
-                        }
-                    </p>
+                    <p className="text-xs text-gray-500">Nhập Google AI Studio Key (Gemini) để thực hiện các tác vụ tạo ảnh và kịch bản.</p>
 
                     <div className="relative">
                         <input
                             type="password"
-                            value={selectedProvider === 'vertex-key' ? localVertexKey : localApiKey}
-                            onChange={(e) => selectedProvider === 'vertex-key' ? setLocalVertexKey(e.target.value) : setLocalApiKey(e.target.value)}
-                            placeholder={selectedProvider === 'vertex-key' ? 'vai-...' : 'Nhập API Key...'}
-                            className={`w-full px-3 py-2.5 bg-gray-900/50 border rounded-lg text-white focus:outline-none focus:ring-2 transition-all text-sm ${selectedProvider === 'vertex-key'
-                                    ? 'border-green-700/50 focus:ring-green-500/50'
-                                    : 'border-gray-700 focus:ring-brand-orange/50'
-                                }`}
+                            value={localApiKey}
+                            onChange={(e) => setLocalApiKey(e.target.value)}
+                            placeholder="Nhập API Key..."
+                            className="w-full px-3 py-2.5 bg-gray-900/50 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-brand-orange/50 transition-all text-sm"
                         />
                         <button
                             onClick={handleVerify}
                             disabled={checkStatus === 'checking'}
-                            className={`absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all ${checkStatus === 'checking' ? 'bg-gray-700 text-gray-500' : selectedProvider === 'vertex-key' ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white hover:shadow-lg shadow-green-500/20 active:scale-95' : `bg-gradient-to-r ${PRIMARY_GRADIENT} text-white hover:shadow-lg shadow-orange-500/20 active:scale-95`}`}
+                            className={`absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all ${checkStatus === 'checking' ? 'bg-gray-700 text-gray-500' : `bg-gradient-to-r ${PRIMARY_GRADIENT} text-white hover:shadow-lg shadow-orange-500/20 active:scale-95`}`}
                         >
                             {checkStatus === 'checking' ? '...' : 'Verify'}
                         </button>
@@ -395,6 +365,94 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                                 'bg-red-900/20 border-red-800/50 text-red-300'
                             }`}>
                             <span>{statusMsg}</span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Imperial Ultra API Section — vertex-key.com */}
+                <div className="pt-4 border-t border-gray-700/50 mt-4">
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center space-x-2">
+                            <div className="p-1.5 bg-cyan-500/10 rounded">
+                                <Crown className="text-cyan-400" size={14} />
+                            </div>
+                            <h4 className="text-xs font-bold text-gray-300 uppercase">Vertex Key API (Gemini)</h4>
+                            {imperialEnabled && (
+                                <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full flex items-center space-x-1 ${imperialHealthy ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                    {imperialHealthy ? <CheckCircle size={10} /> : <XCircle size={10} />}
+                                    <span>{imperialChecking ? 'Checking...' : imperialHealthy ? 'Online' : 'Offline'}</span>
+                                </span>
+                            )}
+                        </div>
+                        <button
+                            onClick={async () => {
+                                const newState = !imperialEnabled;
+                                setImperialEnabled(newState);
+                                setImperialUltraEnabled(newState);
+                                if (newState) {
+                                    setImperialChecking(true);
+                                    const healthy = await checkImperialHealth();
+                                    setImperialHealthy(healthy);
+                                    setImperialChecking(false);
+                                }
+                            }}
+                            className={`relative w-12 h-6 rounded-full transition-colors ${imperialEnabled ? 'bg-cyan-500' : 'bg-gray-700'}`}
+                        >
+                            <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${imperialEnabled ? 'right-1' : 'left-1'}`} />
+                        </button>
+                    </div>
+                    <p className="text-[11px] text-gray-500 mb-2">
+                        Premium API proxy qua vertex-key.com. Hỗ trợ Gemini 2.5 Flash, Gemini 3 Pro, Image Gen. Auto-fallback về Groq khi offline.
+                    </p>
+
+                    {hasAdminImperialKey && (
+                        <div className="bg-blue-900/30 border border-blue-700/50 rounded-lg p-2 mb-2 flex items-center space-x-2">
+                            <ShieldCheck className="text-blue-400 flex-shrink-0" size={14} />
+                            <span className="text-[11px] text-blue-300">🔑 Đang sử dụng key được Admin cấp</span>
+                        </div>
+                    )}
+
+                    <div className="relative mb-2">
+                        <input
+                            type="password"
+                            value={localImperialKey}
+                            onChange={(e) => {
+                                setLocalImperialKey(e.target.value);
+                                setImperialKeySaved(false);
+                            }}
+                            placeholder={hasAdminImperialKey ? 'Key từ Admin đang được sử dụng...' : 'vai-xxxx... (từ vertex-key.com)'}
+                            disabled={hasAdminImperialKey}
+                            className={`w-full px-3 py-2 bg-gray-900/50 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-all ${hasAdminImperialKey ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        />
+                        <button
+                            onClick={async () => {
+                                const trimmed = localImperialKey.trim();
+                                if (!trimmed) return;
+                                setImperialApiKey(trimmed);
+                                setImperialKeySaved(true);
+                                // Auto-verify after save
+                                setImperialChecking(true);
+                                const healthy = await checkImperialHealth();
+                                setImperialHealthy(healthy);
+                                setImperialChecking(false);
+                                if (!imperialEnabled && healthy) {
+                                    setImperialEnabled(true);
+                                    setImperialUltraEnabled(true);
+                                }
+                            }}
+                            disabled={hasAdminImperialKey || !localImperialKey}
+                            className={`absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all ${imperialKeySaved ? 'bg-green-600 text-white' :
+                                hasAdminImperialKey || !localImperialKey ? 'bg-gray-700 text-gray-500' :
+                                    'bg-cyan-600 hover:bg-cyan-500 text-white'
+                                }`}
+                        >
+                            {imperialKeySaved ? '✓ Saved' : 'Save & Test'}
+                        </button>
+                    </div>
+
+                    {imperialEnabled && (
+                        <div className="bg-cyan-900/10 border border-cyan-700/30 rounded-lg p-2 text-[11px] text-cyan-400/80">
+                            👑 Vertex Key đang hoạt động. Text → Gemini 2.5 Flash / 3 Pro. Image → Gemini 3.1 Flash Image.
                         </div>
                     )}
                 </div>

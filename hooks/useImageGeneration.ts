@@ -9,7 +9,7 @@ import {
 import { DIRECTOR_PRESETS, DirectorCategory } from '../constants/directors';
 import { getPresetById } from '../utils/scriptPresets';
 import { uploadImageToSupabase, syncUserStatsToCloud } from '../utils/storageUtils';
-import { safeGetImageData, callGeminiVisionReasoning, preWarmImageCache, fixMimeType, base64ToBlobUrl } from '../utils/geminiUtils';
+import { safeGetImageData, callGeminiVisionReasoning, preWarmImageCache, fixMimeType, base64ToBlobUrl, compressToJpeg } from '../utils/geminiUtils';
 import { GommoAI, urlToBase64 } from '../utils/gommoAI';
 import { IMAGE_MODELS } from '../utils/appConstants';
 import {
@@ -246,9 +246,21 @@ export function useImageGeneration(
         aspectRatio: string,
         parts: any[] = [],
         imageSize: string = '1K',
-        gommoCredentials?: { domain: string; accessToken: string }
+        gommoCredentials?: { domain: string; accessToken: string },
+        outputFormat: 'jpeg' | 'png' = 'jpeg' // NEW: compress to JPEG by default
     ): Promise<{ imageUrl: string; mediaId?: string }> => {
         const provider = getProviderFromModel(model);
+
+        // Helper: Convert base64 to final URL, applying compression if JPEG mode
+        // Quality is resolution-adaptive: 2K+ images need higher quality to avoid artifacts
+        const toOutputUrl = async (base64Data: string, mimeType: string): Promise<string> => {
+            if (outputFormat === 'jpeg') {
+                const jpegQuality = (imageSize === '2K' || imageSize === '4K') ? 0.98 : 0.95;
+                console.log(`[Compress] Resolution: ${imageSize} → JPEG quality: ${jpegQuality}`);
+                return compressToJpeg(base64Data, mimeType, jpegQuality);
+            }
+            return base64ToBlobUrl(base64Data, mimeType);
+        };
 
         console.log(`[ImageGen] Provider: ${provider}, Model: ${model}`);
         console.log(`[ImageGen] Gommo credentials check:`, {
@@ -300,14 +312,14 @@ export function useImageGeneration(
 
                             if (result.base64) {
                                 console.log(`[ImageGen] 👑 ✅ Imperial image generated ${tierLabel} (base64)`);
-                                return { imageUrl: base64ToBlobUrl(result.base64.split(',').pop() || result.base64, 'image/png') };
+                                return { imageUrl: await toOutputUrl(result.base64.split(',').pop() || result.base64, 'image/png') };
                             } else if (result.url) {
                                 console.log(`[ImageGen] 👑 ✅ Imperial image generated ${tierLabel} (URL)`);
                                 const base64 = await urlToBase64(result.url);
                                 if (base64.startsWith('data:')) {
                                     const match = base64.match(/^data:([^;]+);base64,(.+)$/);
                                     if (match) {
-                                        return { imageUrl: base64ToBlobUrl(match[2], match[1]) };
+                                        return { imageUrl: await toOutputUrl(match[2], match[1]) };
                                     }
                                 }
                                 return { imageUrl: base64 };
@@ -357,7 +369,7 @@ export function useImageGeneration(
 
             const imagePart = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData);
             if (imagePart?.inlineData) {
-                return { imageUrl: base64ToBlobUrl(imagePart.inlineData.data, imagePart.inlineData.mimeType) };
+                return { imageUrl: await toOutputUrl(imagePart.inlineData.data, imagePart.inlineData.mimeType) };
             }
             throw new Error('Không nhận được ảnh từ cả Imperial lẫn Gemini fallback.');
         }
@@ -426,7 +438,7 @@ export function useImageGeneration(
                 if (base64Image.startsWith('data:')) {
                     const match = base64Image.match(/^data:([^;]+);base64,(.+)$/);
                     if (match) {
-                        return { imageUrl: base64ToBlobUrl(match[2], match[1]) };
+                        return { imageUrl: await toOutputUrl(match[2], match[1]) };
                     }
                 }
                 return { imageUrl: base64Image };
@@ -488,7 +500,7 @@ export function useImageGeneration(
             const imagePart = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData);
             if (imagePart?.inlineData) {
                 // Convert to Blob URL to save memory (from ~3MB base64 string to ~50 byte pointer)
-                return { imageUrl: base64ToBlobUrl(imagePart.inlineData.data, imagePart.inlineData.mimeType) };
+                return { imageUrl: await toOutputUrl(imagePart.inlineData.data, imagePart.inlineData.mimeType) };
             } else {
                 throw new Error("Không nhận được ảnh từ API.");
             }
@@ -1201,7 +1213,20 @@ TECHNICAL CAMERA: ${effectiveCameraPrompt}`.trim().replace(/\n+/g, ' '); // Flat
             }
 
             if (refinementPrompt) {
-                finalImagePrompt = `REFINEMENT: ${refinementPrompt}. BASE PROMPT: ${finalImagePrompt}`;
+                // SOLUTION C: Check if this is a DOP correction (contains identity/outfit/raccord keywords)
+                // DOP corrections get MAXIMUM priority with !!! markers
+                const isDOPCorrection = /IDENTITY LOCK|OUTFIT LOCK|RACCORD|CAMERA MOVEMENT|CONTINUITY/i.test(refinementPrompt);
+                if (isDOPCorrection) {
+                    finalImagePrompt = `
+!!! DOP RACCORD OVERRIDE — HIGHEST PRIORITY — READ THIS FIRST !!!
+${refinementPrompt}
+!!! END DOP OVERRIDE — APPLY ALL CORRECTIONS ABOVE BEFORE READING BELOW !!!
+
+${finalImagePrompt}`.trim();
+                    console.log('[ImageGen] 🔧 DOP OVERRIDE mode: correction injected at TOP priority');
+                } else {
+                    finalImagePrompt = `REFINEMENT: ${refinementPrompt}. BASE PROMPT: ${finalImagePrompt}`;
+                }
             }
 
             if (negativePrompt) {
@@ -1813,7 +1838,8 @@ IGNORE any prior text descriptions if they conflict with this visual DNA.` });
                 currentState.aspectRatio,
                 supportsVisualRefs ? parts : [], // FIXED: Was hardcoded to isHighRes (Pro only) — now sends refs for ALL models that support subjects (including Flash Image)
                 currentState.resolution || '1K',
-                { domain: currentState.gommoDomain || '', accessToken: currentState.gommoAccessToken || '' }
+                { domain: currentState.gommoDomain || '', accessToken: currentState.gommoAccessToken || '' },
+                currentState.imageOutputFormat || 'jpeg' // Compress to JPEG by default
             );
 
             let imageUrl = rawImageUrl;
@@ -2051,7 +2077,8 @@ IGNORE any prior text descriptions if they conflict with this visual DNA.` });
                 currentState.aspectRatio,
                 [], // No parts for concept art
                 currentState.resolution || '1K',
-                { domain: currentState.gommoDomain || '', accessToken: currentState.gommoAccessToken || '' }
+                { domain: currentState.gommoDomain || '', accessToken: currentState.gommoAccessToken || '' },
+                currentState.imageOutputFormat || 'jpeg' // Compress to JPEG by default
             );
 
             if (imageUrl) {
@@ -2217,9 +2244,26 @@ IGNORE any prior text descriptions if they conflict with this visual DNA.` });
                     const currentSceneIndex = updatedState.scenes.findIndex(s => s.id === scene.id);
                     const prevScene = currentSceneIndex > 0 ? updatedState.scenes[currentSceneIndex - 1] : null;
 
-                    if (prevScene?.generatedImage) {
+                    // ═══════════════════════════════════════════════════════
+                    // SOLUTION A: SMART RACCORD SCOPE
+                    // Skip raccord check if scenes are in different groups/chapters
+                    // Cross-group scenes naturally have different lighting/background
+                    // ═══════════════════════════════════════════════════════
+                    const isSameGroup = prevScene && updatedScene &&
+                        prevScene.groupId && updatedScene.groupId &&
+                        prevScene.groupId === updatedScene.groupId;
+                    const isSameChapter = prevScene && updatedScene &&
+                        prevScene.chapterId && updatedScene.chapterId &&
+                        prevScene.chapterId === updatedScene.chapterId;
+                    const shouldCheckRaccord = isSameGroup || isSameChapter;
+
+                    if (!shouldCheckRaccord && prevScene?.generatedImage) {
+                        console.log(`[DOP] ⏭️ SKIP raccord check: different group/chapter (scene ${updatedScene?.sceneNumber} group=${updatedScene?.groupId} vs prev group=${prevScene?.groupId})`);
+                    }
+
+                    if (prevScene?.generatedImage && shouldCheckRaccord) {
                         setAgentState('dop', 'thinking', 'Đang kiểm tra tính nhất quán (Raccord) với cảnh trước...');
-                        console.log('[DOP] Validating raccord between scenes...');
+                        console.log('[DOP] Validating raccord between scenes (same group/chapter)...');
 
 
                         // [DOP UI FEEDBACK] Show validation in progress
@@ -2231,8 +2275,8 @@ IGNORE any prior text descriptions if they conflict with this visual DNA.` });
                             } : sc)
                         }));
 
-                        // Max 1 retry: If still wrong, show error message for user review
-                        let MAX_DOP_RETRIES = 1;
+                        // SOLUTION B: Increase retry budget to 2 for better chance of fixing
+                        let MAX_DOP_RETRIES = 2;
                         let retryCount = 0;
                         let lastValidation = await validateRaccordWithVision(
                             currentImage,

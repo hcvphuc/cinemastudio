@@ -132,9 +132,48 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
         } catch (error: any) {
             setCheckStatus('error');
-            let msg = error.message || "Lỗi kết nối.";
-            if (msg.includes('403')) msg = "Lỗi 403: Quyền bị từ chối.";
-            else if (msg.includes('400')) msg = "Lỗi 400: API Key không hợp lệ.";
+            const rawMsg = (error.message || String(error)).toLowerCase();
+            let msg = '';
+
+            if (rawMsg.includes('failed to fetch') || rawMsg.includes('networkerror') || rawMsg.includes('network')) {
+                msg = '🌐 Lỗi kết nối mạng: Không thể kết nối đến server Google.\n\n' +
+                    '• Kiểm tra kết nối Internet của bạn\n' +
+                    '• Nếu đang dùng VPN, thử tắt VPN\n' +
+                    '• Nếu dùng mạng công ty/trường học, có thể bị Firewall chặn\n' +
+                    '• Thử mở: generativelanguage.googleapis.com trong browser';
+            } else if (rawMsg.includes('400')) {
+                msg = '❌ Lỗi 400: API Key không đúng định dạng.\n\n' +
+                    '• Kiểm tra lại key có bị copy thiếu ký tự không\n' +
+                    '• Key phải bắt đầu bằng "AIza..." (39 ký tự)\n' +
+                    '• Lấy key tại: aistudio.google.com/apikey';
+            } else if (rawMsg.includes('403')) {
+                msg = '🔒 Lỗi 403: Quyền truy cập bị từ chối.\n\n' +
+                    '• API Key có thể đã bị vô hiệu hóa (revoked)\n' +
+                    '• Hoặc key chưa được bật Gemini API\n' +
+                    '• Vào Google Cloud Console → APIs & Services để kiểm tra';
+            } else if (rawMsg.includes('401') || rawMsg.includes('unauthorized')) {
+                msg = '🔑 Lỗi 401: API Key không hợp lệ hoặc đã hết hạn.\n\n' +
+                    '• Tạo key mới tại: aistudio.google.com/apikey\n' +
+                    '• Đảm bảo key đang ở trạng thái Active';
+            } else if (rawMsg.includes('429') || rawMsg.includes('rate') || rawMsg.includes('quota') || rawMsg.includes('resource_exhausted')) {
+                msg = '⏳ Lỗi 429: Vượt quá giới hạn request.\n\n' +
+                    '• Bạn đã gửi quá nhiều request trong thời gian ngắn\n' +
+                    '• Đợi 1-2 phút rồi thử lại\n' +
+                    '• Nếu lỗi liên tục, kiểm tra quota tại Google Cloud Console';
+            } else if (rawMsg.includes('500') || rawMsg.includes('503') || rawMsg.includes('internal')) {
+                msg = '🔧 Lỗi Server Google (500/503): Server đang bị tạm thời lỗi.\n\n' +
+                    '• Đây là lỗi từ phía Google, không phải do key của bạn\n' +
+                    '• Thử lại sau 1-2 phút';
+            } else if (rawMsg.includes('cors')) {
+                msg = '🚫 Lỗi CORS: Browser bị chặn truy cập API.\n\n' +
+                    '• Thử tắt các extension chặn quảng cáo (AdBlock)\n' +
+                    '• Hoặc thử dùng browser khác (Chrome khuyến nghị)';
+            } else {
+                msg = `⚠️ Lỗi không xác định: ${error.message || 'Không có thông tin chi tiết.'}\n\n` +
+                    '• Kiểm tra Console (F12) để xem chi tiết lỗi\n' +
+                    '• Thử lại sau hoặc liên hệ hỗ trợ';
+            }
+
             setStatusMsg(msg);
         }
     };
@@ -360,7 +399,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                     </div>
 
                     {checkStatus !== 'idle' && (
-                        <div className={`text-[11px] p-2.5 rounded-lg border flex items-start animate-fade-in ${checkStatus === 'checking' ? 'bg-blue-900/20 border-blue-800/50 text-blue-300' :
+                        <div className={`text-[11px] p-2.5 rounded-lg border flex items-start animate-fade-in whitespace-pre-line ${checkStatus === 'checking' ? 'bg-blue-900/20 border-blue-800/50 text-blue-300' :
                             checkStatus === 'success' ? 'bg-green-900/20 border-green-800/50 text-green-300' :
                                 'bg-red-900/20 border-red-800/50 text-red-300'
                             }`}>

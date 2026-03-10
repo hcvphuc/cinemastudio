@@ -285,6 +285,7 @@ export interface ProjectState {
   gommoCredits?: number; // Cached credit balance
 
   aspectRatio: string; // "16:9" | "9:16" | "1:1" | "4:3" | "3:4"
+  imageOutputFormat?: 'jpeg' | 'png'; // Output format: jpeg (compressed, ~400KB) or png (lossless, ~3-5MB). Default: jpeg
 
   resolution: string;
   scriptModel?: string; // Selected Script Gen Model (Gemini 3 series)

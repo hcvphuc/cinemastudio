@@ -41,6 +41,8 @@ interface StyleSettingsSectionProps {
     onOpenExcelImport?: () => void; // NEW: Open Excel Import modal
     generationConfig?: import('../../types').GenerationConfig;
     onGenerationConfigChange?: (config: import('../../types').GenerationConfig) => void;
+    imageOutputFormat?: 'jpeg' | 'png';
+    onImageOutputFormatChange?: (format: 'jpeg' | 'png') => void;
 }
 
 
@@ -82,7 +84,9 @@ export const StyleSettingsSection: React.FC<StyleSettingsSectionProps> = ({
     onOpenManualScript,
     onOpenExcelImport,
     generationConfig,
-    onGenerationConfigChange
+    onGenerationConfigChange,
+    imageOutputFormat = 'jpeg',
+    onImageOutputFormatChange
 }) => {
 
 
@@ -175,8 +179,8 @@ export const StyleSettingsSection: React.FC<StyleSettingsSectionProps> = ({
                         </div>
                     </div>
 
-                    {/* Row 2: Resolution + Aspect Ratio + Script Language */}
-                    <div className="grid grid-cols-3 gap-4">
+                    {/* Row 2: Resolution + Aspect Ratio + Image Format + Script Language */}
+                    <div className="grid grid-cols-4 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-gray-300 mb-2">Độ phân giải (Resolution)</label>
                             {(() => {
@@ -207,6 +211,31 @@ export const StyleSettingsSection: React.FC<StyleSettingsSectionProps> = ({
                                     <option key={ratio.value} value={ratio.value}>{ratio.label}</option>
                                 ))}
                             </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">📦 Image Format</label>
+                            <div className="flex rounded-md overflow-hidden border border-gray-600">
+                                <button
+                                    onClick={() => onImageOutputFormatChange?.('jpeg')}
+                                    className={`flex-1 px-3 py-2 text-xs font-bold transition-colors ${imageOutputFormat === 'jpeg'
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-gray-700 text-gray-400 hover:text-white'
+                                        }`}
+                                >
+                                    JPEG 92%
+                                    <div className={`text-[9px] font-normal mt-0.5 ${imageOutputFormat === 'jpeg' ? 'text-emerald-200' : 'text-gray-500'}`}>~400KB/ảnh</div>
+                                </button>
+                                <button
+                                    onClick={() => onImageOutputFormatChange?.('png')}
+                                    className={`flex-1 px-3 py-2 text-xs font-bold transition-colors ${imageOutputFormat === 'png'
+                                            ? 'bg-amber-600 text-white'
+                                            : 'bg-gray-700 text-gray-400 hover:text-white'
+                                        }`}
+                                >
+                                    PNG
+                                    <div className={`text-[9px] font-normal mt-0.5 ${imageOutputFormat === 'png' ? 'text-amber-200' : 'text-gray-500'}`}>~3-5MB/ảnh</div>
+                                </button>
+                            </div>
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-300 mb-2">Ngôn ngữ nguồn cho Script</label>

@@ -347,9 +347,9 @@ export function useImageGeneration(
             const response = await withRetry(async () => {
                 return await ai.models.generateContent({
                     model: 'gemini-3-pro-image-preview',
-                    contents: [{ parts: fullParts }],
+                    contents: fullParts,
                     config: {
-                        responseModalities: ["IMAGE"],
+                        responseModalities: ["TEXT", "IMAGE"],
                         imageConfig: { aspectRatio: aspectRatio || "16:9" }
                     },
                 });
@@ -463,10 +463,10 @@ export function useImageGeneration(
             console.log('[ImageGen] 🔵 Using GEMINI provider');
             const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
 
-            // Build parts in Google's recommended order: TEXT FIRST, then IMAGES
+            // Build parts: Google pattern — text prompt + inline images as flat array
             const fullParts: any[] = [];
-            if (prompt) fullParts.push({ text: prompt }); // Text FIRST per docs
-            fullParts.push(...parts); // Then all image references
+            if (prompt) fullParts.push({ text: prompt });
+            fullParts.push(...parts);
 
             console.log(`[ImageGen] Generating with resolution: ${imageSize}, aspectRatio: ${aspectRatio}, parts: ${fullParts.length}`);
 
@@ -474,12 +474,12 @@ export function useImageGeneration(
             const response = await withRetry(async () => {
                 return await ai.models.generateContent({
                     model: model,
-                    contents: [{ parts: fullParts }],
+                    contents: fullParts, // Flat array per Google SDK docs
                     config: {
-                        responseModalities: ["IMAGE"], // Enforce Image output
+                        responseModalities: ["TEXT", "IMAGE"], // Enable reasoning for face identity lock
                         imageConfig: {
                             aspectRatio: aspectRatio || "16:9",
-                            imageSize: imageSize || '1K' // Pass resolution to API
+                            imageSize: imageSize || '1K'
                         }
                     },
                 });
@@ -681,6 +681,10 @@ OUTPUT ONLY THE PROMPT. DO NOT OUTPUT MARKDOWN OR EXPLANATION.`;
             let charPrompt = '';
             const isDocumentary = activePreset?.category === 'documentary';
 
+            // Check if any characters have identity reference images (needed across all branches)
+            // Includes characterSheet (new), faceImage (legacy), masterImage (fallback)
+            const hasCharFaceRefs = selectedChars.some(c => c.characterSheet || c.faceImage || c.bodyImage || c.masterImage);
+
             if (selectedChars.length > 0) {
                 // Find group to check for overrides
                 const group = sceneToUpdate.groupId
@@ -714,14 +718,27 @@ OUTPUT ONLY THE PROMPT. DO NOT OUTPUT MARKDOWN OR EXPLANATION.`;
                     ? '' // No outfit lock for animals
                     : ' (MANDATORY COSTUME LOCK: Character MUST be wearing the exact clothing/uniform shown in their FULL BODY reference image OR the specified OUTFIT OVERRIDE. ABSOLUTELY NO NAKEDNESS.)';
 
-                // FACELESS ENFORCEMENT
-                const isFacelessMode = currentState.globalCharacterStyleId?.includes('faceless');
+                // ═══════════════════════════════════════════════════════════════
+                // AUTO-DETECT CONFLICT: Face ID + Faceless Mode = CONTRADICTION
+                // If characters have face references, faceless mode MUST be disabled
+                // ═══════════════════════════════════════════════════════════════
+                const isFacelessStyleActive = currentState.globalCharacterStyleId?.includes('faceless') ||
+                    currentState.globalCharacterStyleId?.includes('mannequin');
+
+                if (hasCharFaceRefs && isFacelessStyleActive) {
+                    console.warn(`[ImageGen] ⚠️🚨 CONFLICT DETECTED: Characters have Face ID references but Character Style is "${currentState.globalCharacterStyleId}"!`);
+                    console.warn(`[ImageGen] ⚠️🚨 AUTO-OVERRIDE: Disabling faceless/mannequin mode to preserve Face ID.`);
+                    console.warn(`[ImageGen] ⚠️🚨 To fix permanently: Change Character Style to "Cinematic Realistic" in Settings.`);
+                }
+
+                // FACELESS ENFORCEMENT — DISABLED if characters have face references
+                const isFacelessMode = isFacelessStyleActive && !hasCharFaceRefs;
                 const facelessConstraint = (isFacelessMode && !hasAnimal)
                     ? ' !!! STRICT FACELESS MODE: NO FACES, NO EYES, NO MOUTH. Heads must be smooth/featureless. EMOTION MUST BE SHOWN VIA EXAGGERATED BODY LANGUAGE, POSTURE AND HAND GESTURES ONLY. !!! '
                     : '';
 
-                // MANNEQUIN MATERIAL ENFORCEMENT (Critical for style consistency)
-                const isMannequinMode = currentState.globalCharacterStyleId?.includes('mannequin');
+                // MANNEQUIN MATERIAL ENFORCEMENT — DISABLED if characters have face references
+                const isMannequinMode = currentState.globalCharacterStyleId?.includes('mannequin') && !hasCharFaceRefs;
                 const mannequinMaterialConstraint = (isMannequinMode && !hasAnimal)
                     ? `[STYLE TRIGGER]: !!! STRICT FACELESS MANNEQUIN PROTOCOL ACTIVE !!!
 - HEAD: Humanoid shape, smooth MATTE WHITE RESIN material. ABSOLUTELY NO EYES, NO NOSE, NO MOUTH, NO EARS.
@@ -733,13 +750,12 @@ OUTPUT ONLY THE PROMPT. DO NOT OUTPUT MARKDOWN OR EXPLANATION.`;
                 charPrompt = `${mannequinMaterialConstraint} Appearing Characters: ${charDesc}${outfitConstraint}${facelessConstraint}`;
 
                 // IDENTITY LOCK: When characters have reference images, enforce strict consistency
-                const hasReferenceImages = selectedChars.some(c => c.faceImage || c.bodyImage);
-                if (hasReferenceImages) {
-                    charPrompt += ` [IDENTITY LOCK - CRITICAL]: Keep EXACT facial features, proportions, hairstyle, and clothing from reference images. NO variations, NO changes to face structure. Characters must be 100% recognizable from their reference sheets.`;
+                if (hasCharFaceRefs) {
+                    charPrompt += ` Keep each character's face and body identical to their reference photo.`;
                 }
             } else if (isDocumentary) {
-                // DOCUMENTARY MODE: Check mannequin style first
-                const isMannequinMode = currentState.globalCharacterStyleId?.includes('mannequin');
+                // DOCUMENTARY MODE: Check mannequin style first — but respect Face ID references
+                const isMannequinMode = currentState.globalCharacterStyleId?.includes('mannequin') && !hasCharFaceRefs;
                 const mannequinForDocs = isMannequinMode
                     ? `Use FACELESS WHITE MANNEQUIN figures (smooth cast resin material, egg-shaped featureless heads, hard plastic hands, NO skin texture whatsoever)`
                     : `Use realistic anonymous people fitting the scene context`;
@@ -1160,9 +1176,13 @@ ${anatomyNegativePrompt}
 ${continuityLinkInstruction}
 ${characterStateContinuity}
 ${environmentLockPrompt}
-${cameraProgressionPrompt}
 ${coreActionPrompt}
 FULL SCENE ACTION: ${cleanedContext}
+
+[CAMERA - MANDATORY FRAMING]:
+${cameraAngleOverrideFromDOP ? `FORCED CAMERA: ${cameraAngleOverrideFromDOP} (DOP OVERRIDE - MUST USE THIS EXACT ANGLE)` : scaleCmd} ${scaleLockInstruction} ${noDriftGuard}
+${cameraProgressionPrompt}
+TECHNICAL CAMERA: ${effectiveCameraPrompt}
 
 [CHARACTERS & APPEARANCE]:
 ${charPrompt}
@@ -1176,9 +1196,7 @@ ${globalStoryPrompt}
 ${directorDNAPrompt}
 ${dopResearchPrompt}
 ${authoritativeStyle}
-${cameraAngleOverrideFromDOP ? `FORCED CAMERA: ${cameraAngleOverrideFromDOP} (DOP OVERRIDE - MUST USE THIS EXACT ANGLE)` : scaleCmd} ${scaleLockInstruction} ${noDriftGuard}
-STYLE DETAILS: ${metaTokens}
-TECHNICAL CAMERA: ${effectiveCameraPrompt}`.trim().replace(/\n+/g, ' '); // Flatten to single line for API stability
+STYLE DETAILS: ${metaTokens}`.trim().replace(/\n+/g, ' '); // Flatten to single line for API stability
                 console.log('[ImageGen] 🔵 GEMINI prompt (Context-First Re-ordered)');
             }
 
@@ -1273,65 +1291,79 @@ The text prompt below describes the ACTUAL scene you must create.` });
             // If baseImage is provided, this is an EDIT operation, not a generation from scratch.
 
 
-            // 5a. CHARACTER FACE ID ANCHOR (ABSOLUTE FIRST - Before Style!)
-            // Using Google's recommended pattern: "Use supplied image as reference for how [name] should look"
+            // 5a. CHARACTER IDENTITY — INJECT FIRST (Gemini weights early references more)
+            // Face ID and Body refs are placed BEFORE style/environment so model prioritizes identity.
+            // Single injection only — no duplicates.
+            const prevScene = currentSceneIndex > 0 ? (currentState.scenes || [])[currentSceneIndex - 1] : null;
+            const prevSceneCharIds = prevScene?.characterIds || [];
 
-            // DEBUG: Log character reference status
             if (selectedChars.length > 0) {
                 console.log('[ImageGen] 🎭 CHARACTER REFERENCE CHECK:');
                 selectedChars.forEach(c => {
-                    console.log(`  - ${c.name}: faceImage=${c.faceImage ? '✅' : '❌'}, bodyImage=${c.bodyImage ? '✅' : '❌'}, masterImage=${c.masterImage ? '✅' : '❌'}`);
+                    console.log(`  - ${c.name}: characterSheet=${c.characterSheet ? '✅' : '❌'}, faceImage=${c.faceImage ? '✅' : '❌'}, bodyImage=${c.bodyImage ? '✅' : '❌'}, masterImage=${c.masterImage ? '✅' : '❌'}`);
                 });
             }
 
+            // ═══════════════════════════════════════════════════════════════
+            // FACE ID + CHARACTER SHEET — Injected FIRST for maximum identity priority
+            // NEW: Character Sheet (4×2 grid) replaces old faceImage/bodyImage
+            // Fallback chain: characterSheet → faceImage → masterImage
+            // ═══════════════════════════════════════════════════════════════
             for (const char of selectedChars) {
-                // PRIMARY ANCHOR: Face ID (most important)
-                const isAnimal = /horse|snake|dog|cat|wolf|bird|lion|tiger|dragon|animal|creature|bear|eagle|fish|shark|whale/i.test(char.name) ||
-                    /horse|snake|dog|cat|wolf|bird|lion|tiger|dragon|animal|creature|bear|eagle|fish|shark|whale/i.test(char.description);
+                // Priority: characterSheet > faceImage > masterImage
+                const identityRef = char.characterSheet || char.faceImage || char.masterImage;
+                const source = char.characterSheet ? 'characterSheet'
+                    : char.faceImage ? 'faceImage'
+                        : char.masterImage ? 'masterImage (fallback)'
+                            : null;
 
-                if (char.faceImage) {
-                    const imgData = await safeGetImageData(char.faceImage);
-                    if (imgData) {
-                        const refLabel = `IDENTITY_${char.name.toUpperCase().replace(/\s+/g, '_')}`;
+                if (identityRef && source) {
+                    console.log(`[ImageGen] 🔍 Loading ${source} for ${char.name}: ${identityRef.substring(0, 60)}...`);
+                    const identityData = await safeGetImageData(identityRef);
+                    if (identityData) {
+                        const isReentry = !prevSceneCharIds.includes(char.id);
+                        const isSheet = source === 'characterSheet';
+                        // Character Sheet already contains face + body + multiple angles
+                        const instruction = isSheet
+                            ? `This is the complete character reference sheet for "${char.name}" showing face, body, and multiple angles. Generate this EXACT person — same face, same body proportions, same features.${isReentry ? ' This character is re-entering the scene.' : ''}`
+                            : `This is the identity reference for "${char.name}". Generate this exact person with this exact face and body.${isReentry ? ' This character is re-entering the scene — use this exact appearance.' : ''}`;
 
-                        if (isAnimal) {
-                            // ANIMAL/CREATURE LOGIC: Softer lock, focus on species/texture, NO face structure mapping
-                            parts.push({ text: `[${refLabel}]: VISUAL REFERENCE for ${char.name}. Use this image as a guide for the creature's appearance (species, color, pattern, size). Do NOT treat this as a human face. Blend it naturally into the scene.` });
-                            console.log(`[ImageGen] 🐾 Injected CREATURE reference for ${char.name}`);
-                        } else {
-                            // HUMAN LOGIC: Strict Face Lock
-                            parts.push({ text: `[${refLabel}]: !!! MANDATORY IDENTITY LOCK !!! Use this supplied image as the ONLY AUTHORITATIVE reference for how ${char.name} should look. Match face structure, features, and identity 100%. ABSOLUTELY NO VARIATION in facial structure allowed. ${char.description}` });
-                            console.log(`[ImageGen] 👤 Injected FACE reference for ${char.name}`);
-                        }
-
-                        parts.push(createInlineData(imgData.data, imgData.mimeType));
-                        continuityInstruction += `(STRICT IDENTITY LOCK: ${char.name}) `;
+                        parts.push({ text: instruction });
+                        parts.push(createInlineData(identityData.data, identityData.mimeType));
+                        console.log(`[ImageGen] 🔒 IDENTITY injected for ${char.name} ✅ via ${source} (${identityData.mimeType}, ${Math.round(identityData.data.length / 1024)}KB)`);
                     } else {
-                        console.warn(`[ImageGen] ⚠️ Failed to load FACE image for ${char.name}`);
+                        console.error(`[ImageGen] ❌ IDENTITY FAILED for ${char.name} — safeGetImageData returned null! URL was: ${identityRef.substring(0, 80)}`);
                     }
-                } else if (char.masterImage) {
-                    // Fallback to Master Image if Face Image is missing
-                    const imgData = await safeGetImageData(char.masterImage);
-                    if (imgData) {
-                        const refLabel = `IDENTITY_${char.name.toUpperCase().replace(/\s+/g, '_')}`;
-                        parts.push({ text: `[${refLabel}]: !!! MANDATORY IDENTITY LOCK (MASTER) !!! Use this supplied image as the ONLY AUTHORITATIVE reference for ${char.name}. Focus on the face and identity from this image. ${char.description}` });
-                        parts.push(createInlineData(imgData.data, imgData.mimeType));
-                        continuityInstruction += `(STRICT IDENTITY LOCK (MASTER): ${char.name}) `;
-                        console.log(`[ImageGen] 👤 Injected MASTER reference (as Face fallback) for ${char.name}`);
-                    }
+                } else {
+                    console.warn(`[ImageGen] ⚠️ ${char.name} has NO characterSheet, NO faceImage, NO masterImage — cannot inject identity`);
+                }
+            }
+
+            // BODY/OUTFIT — Only inject if NO characterSheet (sheet already has body angles)
+            for (const char of selectedChars) {
+                // Skip body refs if characterSheet exists — it already contains all angles
+                if (char.characterSheet) {
+                    console.log(`[ImageGen] ℹ️ Skipping body refs for ${char.name} — characterSheet covers all angles`);
+                    continue;
                 }
 
-                // SECONDARY ANCHOR: Body Image (full body/costume reference)
-                // Priority: bodyImage (AI-generated) > masterImage (fallback)
-                const bodyRef = char.bodyImage || char.masterImage;
-                if (bodyRef && bodyRef !== char.faceImage) {
-                    const imgData = await safeGetImageData(bodyRef);
+                const bodyRefs: { type: string, img: string }[] = [];
+                if (char.bodyImage) {
+                    bodyRefs.push({ type: 'FULL BODY', img: char.bodyImage });
+                }
+                if (isPro) {
+                    if (char.sideImage) bodyRefs.push({ type: 'SIDE VIEW', img: char.sideImage });
+                    if (char.backImage) bodyRefs.push({ type: 'BACK VIEW', img: char.backImage });
+                }
+                if (bodyRefs.length === 0 && !char.faceImage) continue;
+
+                const refDataArray = await Promise.all(
+                    bodyRefs.map(ref => safeGetImageData(ref.img).then(data => ({ ref, data })))
+                );
+                for (const { ref, data: imgData } of refDataArray) {
                     if (imgData) {
-                        const refLabel = `FULLBODY_${char.name.toUpperCase()}`;
-                        // STRONGER COSTUME LOCK
-                        parts.push({ text: `[${refLabel}]: MANDATORY COSTUME REFERENCE for ${char.name}. Match clothing, colors, uniform, and textures 100%. If character has clothes in this image, they MUST HAVE CLOTHES in the output.` });
+                        parts.push({ text: `${char.name}'s outfit reference (${ref.type}). Keep this clothing exactly.` });
                         parts.push(createInlineData(imgData.data, imgData.mimeType));
-                        console.log(`[ImageGen] 👕 Injected BODY reference for ${char.name} (source: ${char.bodyImage ? 'bodyImage' : 'masterImage fallback'})`);
                     }
                 }
             }
@@ -1356,35 +1388,24 @@ The text prompt below describes the ACTUAL scene you must create.` });
                 }
             }
 
-            // 5c. FACE OVERRIDE (Immediately after style to prevent face contamination)
-            // This re-establishes character identity after AI has seen the style image
-            for (const char of selectedChars) {
-                if (char.faceImage) {
-                    const imgData = await safeGetImageData(char.faceImage);
-                    if (imgData) {
-                        const refLabel = `FACE_OVERRIDE: ${char.name.toUpperCase()}`;
-                        parts.push({ text: `[${refLabel}]: !!! IDENTITY GUARD !!! ABSOLUTELY REJECT any facial variations introduced by style. RE-ESTABLISH this exact person. This face is the ONLY valid person for ${char.name}.` });
-                        parts.push(createInlineData(imgData.data, imgData.mimeType));
-                    }
-                }
-            }
-
+            // 5c. FACE OVERRIDE removed — was duplicating face data.
+            // Identity is enforced in STEP 1 below with the strongest instruction.
 
             // 5d. ABSOLUTE SET LOCK (Master Anchor + Continuity Anchor)
             if (sceneToUpdate.groupId) {
                 const groupObj = currentState.sceneGroups?.find(g => g.id === sceneToUpdate.groupId);
 
-                // SAME LOCATION LOCK: All scenes in this group share the same physical environment
+                // SAME LOCATION LOCK: Same environment, but camera angle MUST vary
                 if (groupObj) {
                     const sameLocationLock = `!!! SAME LOCATION LOCK !!! This scene is part of location group "${groupObj.name}". 
 ALL SCENES IN THIS GROUP SHARE THE SAME PHYSICAL ENVIRONMENT: ${groupObj.description}.
-YOU MUST MAINTAIN:
-- Same architectural style, room layout, wall colors, and ceiling height
-- Same furniture positions (tables, chairs, counters remain fixed)
-- Same window/door placements
-- Same lighting sources and color temperature
+MAINTAIN environment identity:
+- Same architectural style, wall materials/colors, ceiling type
+- Same lighting quality and color temperature
 - Same time of day: ${groupObj.timeOfDay || 'consistent with group'}
-DO NOT invent new environments or change the location. This is NOT a different place.`;
+DO NOT invent new environments or change the location. This is NOT a different place.
+!!! CRITICAL: CAMERA ANGLE MUST CHANGE BETWEEN SHOTS !!!
+Each scene must have a DIFFERENT camera angle, framing, and composition. Follow the camera instruction in this prompt. Do NOT repeat the same wide establishing shot for every scene.`;
                     continuityInstruction += sameLocationLock;
                 }
 
@@ -1417,20 +1438,10 @@ DO NOT invent new environments or change the location. This is NOT a different p
                     continuityInstruction += `[NO CONCEPT IMAGE]: Strictly infer environment from "${groupObj.description}". Do NOT hallucinate different locations. `;
                 }
 
-                // FIRST SCENE BACKUP: If no concept image but first scene exists, use it as environment template
-                const firstSceneInGroup = (currentState.scenes || [])
-                    .filter(s => s.groupId === sceneToUpdate.groupId && s.generatedImage && s.id !== sceneToUpdate.id)
-                    .sort((a, b) => parseInt(a.scene_number) - parseInt(b.scene_number))[0];
-
-                if (firstSceneInGroup?.generatedImage && !groupObj?.conceptImage) {
-                    const imgData = await safeGetImageData(firstSceneInGroup.generatedImage);
-                    if (imgData) {
-                        const refLabel = `ENVIRONMENT_ONLY_LOCK`;
-                        parts.push({ text: `[${refLabel}]: Use this as the RIGID template for architecture and lighting ONLY. Match: layout, wall textures, room geometry, furniture placement, and lighting source. ABSOLUTELY IGNORE characters, clothing, and small props. This is a background-only consistency anchor.` });
-                        parts.push(createInlineData(imgData.data, imgData.mimeType));
-                        continuityInstruction += `(BACKGROUND LOCK FROM MASTER SCENE) `;
-                    }
-                }
+                // FIRST SCENE BACKUP: REMOVED — injecting any previous scene image causes
+                // the model to clone the exact same composition. Environment consistency
+                // is handled by Location Lock text description + Concept Image (if exists).
+                // Text-only approach gives the model freedom to compose different angles.
 
                 if (continuityInstruction) {
                     continuityInstruction = `ENVIRONMENT REFERENCE: Background elements only. Character appearance from IDENTITY references. ${continuityInstruction}`;
@@ -1438,78 +1449,9 @@ DO NOT invent new environments or change the location. This is NOT a different p
             }
 
 
-            // 5c. CHARACTER REFERENCES - FACE ID FIRST (Gemini weights early references more)
+            // 5c. CHARACTER REFERENCES already injected in 5a above (Face ID + Body)
+            // Moved to top of parts[] for maximum Gemini identity priority
             let referencePreamble = '';
-
-            // Track characters from the previous scene for re-entry logic
-            const prevScene = currentSceneIndex > 0 ? (currentState.scenes || [])[currentSceneIndex - 1] : null;
-            const prevSceneCharIds = prevScene?.characterIds || [];
-
-            // STEP 1: Inject ALL Face IDs FIRST (highest priority for identity)
-            for (const char of selectedChars) {
-                if (char.faceImage) {
-                    const faceData = await safeGetImageData(char.faceImage);
-                    if (faceData) {
-                        const isReentry = !prevSceneCharIds.includes(char.id);
-
-                        // STRONGEST possible Face ID instruction
-                        parts.push({
-                            text: `🔒 [FACE ID LOCK - ${char.name.toUpperCase()}]: 
-!!! CRITICAL IDENTITY REQUIREMENT !!! 
-This is the ONLY acceptable face for character "${char.name}".
-COPY EXACTLY:
-- Facial bone structure (forehead, cheekbones, jaw)
-- Eye shape and spacing
-- Nose bridge and tip shape  
-- Mouth shape and lip fullness
-- Skin tone and texture
-${isReentry ? '⚠️ CHARACTER RE-ENTERING - Reset to this exact face!' : ''}
-DO NOT generate a different face. DO NOT create a "similar" face. This EXACT face only.`
-                        });
-                        parts.push(createInlineData(faceData.data, faceData.mimeType));
-                        console.log(`[ImageGen] 🔒 FACE ID injected FIRST for ${char.name}`);
-                    }
-                }
-            }
-
-            // STEP 2: Then add body/outfit references
-            // PRIORITY: Use AI-generated bodyImage and faceImage sheets ONLY
-            // Do NOT use masterImage (user upload) as character reference
-            for (const char of selectedChars) {
-                const bodyRefs: { type: string, img: string }[] = [];
-
-                // PRIORITY 1: AI-generated bodyImage (from character sheet generation)
-                if (char.bodyImage) {
-                    bodyRefs.push({ type: 'FULL BODY', img: char.bodyImage });
-                    console.log(`[ImageGen] ✅ Using AI-generated bodyImage for ${char.name}`);
-                }
-
-                // PRIORITY 2: Additional angle views (only if Pro model)
-                if (isPro) {
-                    if (char.sideImage) bodyRefs.push({ type: 'SIDE VIEW', img: char.sideImage });
-                    if (char.backImage) bodyRefs.push({ type: 'BACK VIEW', img: char.backImage });
-                }
-
-                // FALLBACK: Only if NO bodyImage AND NO faceImage, skip this character entirely
-                // masterImage is NOT used for character identity - only for initial sheet generation
-                if (bodyRefs.length === 0 && !char.faceImage) {
-                    console.warn(`[ImageGen] ⚠️ Character ${char.name} has no faceImage or bodyImage - skipping character reference`);
-                    continue; // Skip this character - no valid AI-generated references
-                }
-
-                // PARALLEL loading of body reference images
-                const refDataArray = await Promise.all(
-                    bodyRefs.map(ref => safeGetImageData(ref.img).then(data => ({ ref, data })))
-                );
-
-                for (const { ref, data: imgData } of refDataArray) {
-                    if (imgData) {
-                        parts.push({ text: `[${char.name.toUpperCase()} ${ref.type}]: Use for OUTFIT and POSE only. Face from FACE ID LOCK above. Description: ${char.description}` });
-                        parts.push(createInlineData(imgData.data, imgData.mimeType));
-                        referencePreamble += `(${char.name} ${ref.type}) `;
-                    }
-                }
-            }
 
             const selectedProducts = (currentState.products || []).filter(p => (sceneToUpdate.productIds || []).includes(p.id));
             for (const prod of selectedProducts) {
@@ -1548,61 +1490,64 @@ DO NOT generate a different face. DO NOT create a "similar" face. This EXACT fac
                 }
             }
 
-            // 5e. CONTINUITY ANCHOR FROM PREVIOUS SHOT (Stronger Logic)
-            // Use if isContinuityMode is ON and we are in the same group (or no group but sequential)
-            // SKIP dopFailed scenes - use last GOOD scene as reference
+            // 5e. CONTINUITY ANCHOR FROM PREVIOUS SHOT
+            // ═══════════════════════════════════════════════════════════════
+            // IMPORTANT: When scenes are in the SAME GROUP with environment lock,
+            // do NOT inject previous scene image — it causes the model to clone
+            // the exact same composition. Environment consistency is already
+            // handled by Location Lock text + Concept Image.
+            // Only inject for CROSS-GROUP transitions or when no environment ref exists.
+            // ═══════════════════════════════════════════════════════════════
+            const hasEnvironmentLock = sceneToUpdate.groupId && continuityInstruction.length > 0;
+
             if (isContinuityMode && currentSceneIndex > 0 && !sceneToUpdate.referenceImage) {
-                // Find previous scene that has image AND is not marked as dopFailed
                 const prevSceneWithImage = (currentState.scenes || [])
                     .slice(0, currentSceneIndex)
                     .reverse()
                     .find(s => s.generatedImage && !(s as any).dopFailed);
 
-                // Only use as anchor if it belongs to the same Scene Group (strong continuity) or is the immediate predecessor
                 const isSameGroup = prevSceneWithImage && prevSceneWithImage.groupId === sceneToUpdate.groupId;
-                const isImmediate = prevSceneWithImage && (parseInt(sceneToUpdate.sceneNumber) - parseInt(prevSceneWithImage.sceneNumber) <= 2); // Allow gap of 1 (failed scene)
+                const isImmediate = prevSceneWithImage && (parseInt(sceneToUpdate.sceneNumber) - parseInt(prevSceneWithImage.sceneNumber) <= 2);
 
                 if (prevSceneWithImage?.generatedImage && (isSameGroup || isImmediate)) {
-                    const imgData = await safeGetImageData(prevSceneWithImage.generatedImage);
-                    if (imgData) {
-                        // RE-ENTRY SAFE INSTRUCTION: If previous shot was empty, warn AI not to suppress characters
-                        const wasPrevShotEmpty = (prevSceneWithImage.characterIds?.length || 0) === 0;
-                        const charReturnWarning = wasPrevShotEmpty ? "!!! NOTICE !!! The previous shot was a background-only view. The current shot contains characters; do NOT let this reference suppress their appearance or identity." : "";
+                    // SAME GROUP + has environment lock → SKIP image injection to prevent composition cloning
+                    if (isSameGroup && hasEnvironmentLock) {
+                        console.log(`[ImageGen] 🎬 SKIP continuity image injection — same group "${sceneToUpdate.groupId}" already has environment lock. This allows camera angle variety.`);
+                    } else {
+                        // CROSS-GROUP or no environment lock → inject for visual continuity
+                        const imgData = await safeGetImageData(prevSceneWithImage.generatedImage);
+                        if (imgData) {
+                            const wasPrevShotEmpty = (prevSceneWithImage.characterIds?.length || 0) === 0;
+                            const charReturnWarning = wasPrevShotEmpty ? "!!! NOTICE !!! The previous shot was a background-only view. The current shot contains characters; do NOT let this reference suppress their appearance or identity." : "";
 
-                        // Detect if we are zooming in (Wide -> Close Up)
-                        const isZoomingIn = (anglePrompt.includes('CLOSE') || anglePrompt.includes('CU')) && !prevSceneWithImage.cameraAngleOverride?.includes('CLOSE');
+                            const isZoomingIn = (anglePrompt.includes('CLOSE') || anglePrompt.includes('CU')) && !prevSceneWithImage.cameraAngleOverride?.includes('CLOSE');
+                            const anchorLabel = isZoomingIn ? "ZOOM_IN_ANCHOR" : "CONTINUITY_ANCHOR";
 
-                        const anchorLabel = isZoomingIn ? "ZOOM_IN_ANCHOR" : "CONTINUITY_ANCHOR";
+                            const skippedFailedNote = currentSceneIndex - currentState.scenes.indexOf(prevSceneWithImage) > 1
+                                ? `(Skipped failed scene - using Scene ${prevSceneWithImage.sceneNumber} as reference instead)`
+                                : '';
 
-                        // Note if we skipped a failed scene
-                        const skippedFailedNote = currentSceneIndex - currentState.scenes.indexOf(prevSceneWithImage) > 1
-                            ? `(Skipped failed scene - using Scene ${prevSceneWithImage.sceneNumber} as reference instead)`
-                            : '';
+                            parts.push({
+                                text: `[${anchorLabel}]: CONTINUITY REFERENCE (SELECTIVE). ${skippedFailedNote} ${charReturnWarning}
+USE FROM THIS REFERENCE:
+1. COLOR GRADING: Match the color palette and overall tone
+2. LIGHTING QUALITY: Same light intensity, shadow softness, color temperature
+3. ENVIRONMENT MATERIALS: Same wall textures, floor type, furniture style
 
-                        parts.push({
-                            text: `[${anchorLabel}]: CONTINUITY REFERENCE (SELECTIVE). ${skippedFailedNote} Use previous frame for consistency. ${charReturnWarning}
-INHERIT THESE:
-1. PHYSICAL LIGHTING: Match actual light source direction and shadow placement
-2. ENVIRONMENT: Fixed positions of furniture, architecture, and landmarks
-3. SUBJECTS: Character appearance (clothing, pose, physical features)
+!!! DO NOT COPY FROM THIS REFERENCE !!!:
+- Camera angle, position, or framing — USE THE CAMERA INSTRUCTION IN THIS PROMPT INSTEAD
+- Composition or subject placement — COMPOSE FRESH based on the scene description
 
-!!! DO NOT INHERIT - CAMERA-SPECIFIC EFFECTS !!!:
-- Camera filters (CCTV, night vision, security camera, surveillance overlays)
-- Vignettes, scan lines, recording artifacts, grain patterns
-- Color grading specific to surveillance/special camera POV
-- Text overlays, timestamps, HUD elements, date stamps
-- Fish-eye distortion or lens artifacts from special cameras
+The NEW scene has its OWN camera angle and composition as described in the prompt. Frame it freshly.` });
 
-The NEW scene has its OWN camera style as specified in the current prompt. DO NOT apply previous scene's camera treatment.` });
+                            parts.push(createInlineData(imgData.data, imgData.mimeType));
 
-                        parts.push(createInlineData(imgData.data, imgData.mimeType));
-
-                        if (skippedFailedNote) {
-                            console.log(`[ImageGen] ⚠️ Skipped failed scene, using Scene ${prevSceneWithImage.sceneNumber} as continuity ref`);
+                            if (skippedFailedNote) {
+                                console.log(`[ImageGen] ⚠️ Skipped failed scene, using Scene ${prevSceneWithImage.sceneNumber} as continuity ref`);
+                            }
                         }
                     }
                 } else if (!prevSceneWithImage) {
-                    // No good previous scene found - this is like a new group
                     console.log('[ImageGen] 📍 No valid previous scene - generating as new group (character/environment refs only)');
                 }
             }

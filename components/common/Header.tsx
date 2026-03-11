@@ -36,7 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => (
     <header className="fixed top-0 left-0 right-0 z-50 bg-gray-900 shadow-lg border-b border-gray-800">
         <div className="container mx-auto px-6 py-3 flex justify-between items-center">
-            <h1 className="text-2xl font-bold text-white">{APP_NAME}</h1>
+            <h1 className="text-2xl font-bold text-white">{APP_NAME} <span className="text-xs font-normal text-gray-400 bg-gray-800 px-2 py-0.5 rounded-full ml-1">V6</span></h1>
 
             <div className="flex items-center space-x-4">
                 {/* Continuity Toggle */}

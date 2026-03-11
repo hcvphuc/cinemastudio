@@ -166,7 +166,7 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
     const [readingSpeed, setReadingSpeed] = useState<'slow' | 'medium' | 'fast'>(initialState?.readingSpeed || 'medium');
 
     // Style & Director selection
-    const [selectedStyleId, setSelectedStyleId] = useState<string>(initialState?.selectedStyleId || 'faceless-mannequin');
+    const [selectedStyleId, setSelectedStyleId] = useState<string>(initialState?.selectedStyleId || 'realistic-cinematic');
     const [selectedDirectorId, setSelectedDirectorId] = useState<string>(initialState?.selectedDirectorId || 'werner_herzog');
     const [selectedModel, setSelectedModel] = useState<string>(initialState?.selectedModel || SCRIPT_MODELS[0].value);
 

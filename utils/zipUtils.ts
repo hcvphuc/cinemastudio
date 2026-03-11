@@ -96,6 +96,7 @@ export const handleDownloadAll = async (state: ProjectState) => {
         const cName = slugify(c.name) || c.id;
         const charImages = [
             { key: 'master', img: c.masterImage },
+            { key: 'sheet', img: c.characterSheet },
             { key: 'face', img: c.faceImage },
             { key: 'body', img: c.bodyImage },
             { key: 'side', img: c.sideImage },
@@ -160,7 +161,8 @@ export const handleDownloadAll = async (state: ProjectState) => {
     }
 
     // Generate and download
-    zip.generateAsync({ type: "blob" }).then(function (content: Blob) {
+    try {
+        const content = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
         const filename = state.projectName ? `${slugify(state.projectName)}_full.zip` : 'project-assets.zip';
         const link = document.createElement('a');
         link.href = URL.createObjectURL(content);
@@ -169,7 +171,10 @@ export const handleDownloadAll = async (state: ProjectState) => {
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(link.href);
-    });
+    } catch (e: any) {
+        console.error('ZIP generation failed:', e);
+        alert(`Lỗi tạo ZIP: ${e.message || e}. Dự án quá lớn — thử xóa bớt ảnh cũ hoặc dùng Save Project thay vì Download All.`);
+    }
 };
 
 /* 
@@ -252,6 +257,7 @@ export const saveProjectPackage = async (state: ProjectState) => {
         // 1. Process Characters
         for (const c of safeState.characters) {
             if (c.masterImage) c.masterImage = await processImageField(c.masterImage, `char_${c.id}_master`);
+            if ((c as any).characterSheet) (c as any).characterSheet = await processImageField((c as any).characterSheet, `char_${c.id}_sheet`);
             if (c.faceImage) c.faceImage = await processImageField(c.faceImage, `char_${c.id}_face`);
             if (c.bodyImage) c.bodyImage = await processImageField(c.bodyImage, `char_${c.id}_body`);
             if (c.sideImage) c.sideImage = await processImageField(c.sideImage, `char_${c.id}_side`);
@@ -311,19 +317,15 @@ export const saveProjectPackage = async (state: ProjectState) => {
         zip.file("script_voiceover.txt", scriptContent);
 
         // Download
-        zip.generateAsync({ type: "blob" }).then(function (content: Blob) {
-            const filename = state.projectName ? `${slugify(state.projectName)}_PROJECT.zip` : 'project_package.zip';
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(content);
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(link.href);
-        }).catch((e: any) => {
-            console.error("ZIP Generation Logic Failed:", e);
-            alert("Lỗi khi tạo file ZIP: " + e);
-        });
+        const content = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+        const filename = state.projectName ? `${slugify(state.projectName)}_PROJECT.zip` : 'project_package.zip';
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(content);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
 
     } catch (error) {
         console.error("Failed to save project package:", error);
@@ -360,6 +362,7 @@ export const loadProjectPackage = async (file: File): Promise<ProjectState> => {
     if (state.characters) {
         for (const c of state.characters) {
             c.masterImage = await restoreImage(c.masterImage);
+            if ((c as any).characterSheet !== undefined) (c as any).characterSheet = await restoreImage((c as any).characterSheet);
             c.faceImage = await restoreImage(c.faceImage);
             c.bodyImage = await restoreImage(c.bodyImage);
             c.sideImage = await restoreImage(c.sideImage);

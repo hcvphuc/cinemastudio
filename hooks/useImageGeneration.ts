@@ -719,48 +719,31 @@ OUTPUT ONLY THE PROMPT. DO NOT OUTPUT MARKDOWN OR EXPLANATION.`;
                     : ' (MANDATORY COSTUME LOCK: Character MUST be wearing the exact clothing/uniform shown in their FULL BODY reference image OR the specified OUTFIT OVERRIDE. ABSOLUTELY NO NAKEDNESS.)';
 
                 // ═══════════════════════════════════════════════════════════════
-                // AUTO-DETECT CONFLICT: Face ID + Faceless Mode = CONTRADICTION
-                // If characters have face references, faceless mode MUST be disabled
+                // FORCE REALISTIC: When characters have identity references (characterSheet/faceImage/masterImage),
+                // BYPASS ALL non-realistic styles. Only "realistic-cinematic" is compatible with Face ID.
                 // ═══════════════════════════════════════════════════════════════
-                const isFacelessStyleActive = currentState.globalCharacterStyleId?.includes('faceless') ||
-                    currentState.globalCharacterStyleId?.includes('mannequin');
+                const isRealisticStyle = !currentState.globalCharacterStyleId ||
+                    currentState.globalCharacterStyleId === 'realistic-cinematic' ||
+                    currentState.globalCharacterStyleId === 'realistic' ||
+                    currentState.globalCharacterStyleId.includes('realistic');
 
-                if (hasCharFaceRefs && isFacelessStyleActive) {
-                    console.warn(`[ImageGen] ⚠️🚨 CONFLICT DETECTED: Characters have Face ID references but Character Style is "${currentState.globalCharacterStyleId}"!`);
-                    console.warn(`[ImageGen] ⚠️🚨 AUTO-OVERRIDE: Disabling faceless/mannequin mode to preserve Face ID.`);
-                    console.warn(`[ImageGen] ⚠️🚨 To fix permanently: Change Character Style to "Cinematic Realistic" in Settings.`);
+                if (hasCharFaceRefs && !isRealisticStyle) {
+                    console.warn(`[ImageGen] ⚠️🚨 STYLE OVERRIDE: Characters have identity refs but style is "${currentState.globalCharacterStyleId}"`);
+                    console.warn(`[ImageGen] ⚠️🚨 FORCING REALISTIC MODE — all non-realistic styles bypassed to preserve Face ID consistency`);
                 }
 
-                // FACELESS ENFORCEMENT — DISABLED if characters have face references
-                const isFacelessMode = isFacelessStyleActive && !hasCharFaceRefs;
-                const facelessConstraint = (isFacelessMode && !hasAnimal)
-                    ? ' !!! STRICT FACELESS MODE: NO FACES, NO EYES, NO MOUTH. Heads must be smooth/featureless. EMOTION MUST BE SHOWN VIA EXAGGERATED BODY LANGUAGE, POSTURE AND HAND GESTURES ONLY. !!! '
-                    : '';
+                // ALL non-realistic styles are DISABLED when identity references exist
+                const forceRealistic = hasCharFaceRefs && !isRealisticStyle;
 
-                // MANNEQUIN MATERIAL ENFORCEMENT — DISABLED if characters have face references
-                const isMannequinMode = currentState.globalCharacterStyleId?.includes('mannequin') && !hasCharFaceRefs;
-                const mannequinMaterialConstraint = (isMannequinMode && !hasAnimal)
-                    ? `[STYLE TRIGGER]: !!! STRICT FACELESS MANNEQUIN PROTOCOL ACTIVE !!!
-- HEAD: Humanoid shape, smooth MATTE WHITE RESIN material. ABSOLUTELY NO EYES, NO NOSE, NO MOUTH, NO EARS.
-- HANDS: Matching white hard plastic articulation. NO skin texture, NO veins.
-- BODY: Fully clothed. Any exposed parts MUST be white plastic.
-- MATERIAL: "High-end store mannequin", "Clean minimal resin", "Abstract white figure".`
-                    : '';
-
-                charPrompt = `${mannequinMaterialConstraint} Appearing Characters: ${charDesc}${outfitConstraint}${facelessConstraint}`;
+                charPrompt = `Appearing Characters: ${charDesc}${outfitConstraint}`;
 
                 // IDENTITY LOCK: When characters have reference images, enforce strict consistency
                 if (hasCharFaceRefs) {
                     charPrompt += ` Keep each character's face and body identical to their reference photo.`;
                 }
             } else if (isDocumentary) {
-                // DOCUMENTARY MODE: Check mannequin style first — but respect Face ID references
-                const isMannequinMode = currentState.globalCharacterStyleId?.includes('mannequin') && !hasCharFaceRefs;
-                const mannequinForDocs = isMannequinMode
-                    ? `Use FACELESS WHITE MANNEQUIN figures (smooth cast resin material, egg-shaped featureless heads, hard plastic hands, NO skin texture whatsoever)`
-                    : `Use realistic anonymous people fitting the scene context`;
-
-                charPrompt = `DOCUMENTARY STYLE: ${mannequinForDocs} for all humans. Focus on storytelling through clothing and body language. NO SKIN TEXTURE - if mannequin style is enabled, ALL body parts must be smooth plastic.`;
+                // DOCUMENTARY MODE: Always use realistic style
+                charPrompt = `DOCUMENTARY STYLE: Use realistic people fitting the scene context. Focus on storytelling through clothing and body language.`;
             } else {
                 // EXPLICIT NO CHARACTER for macro/landscape shots (non-documentary)
                 charPrompt = `STRICT NEGATIVE: NO PEOPLE, NO CHARACTERS, NO HUMANS, NO FACES, NO BODY PARTS. EXPLICITLY REMOVE ALL HUMAN ELEMENTS. FOCUS ONLY ON ${cleanedContext.toUpperCase() || 'ENVIRONMENT'}.`;

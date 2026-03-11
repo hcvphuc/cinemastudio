@@ -633,7 +633,7 @@ const App: React.FC = () => {
             // When logged out, we can decide whether to clear the key or keep local one
             // setUserApiKey(''); 
         }
-    }, [session?.user?.id]); // Only re-run when user ID changes (not object reference)
+    }, [session]);
 
     // ========== BATCHED INITIALIZATION (Performance Optimization) ==========
     // Merged 3 separate effects into 1 to reduce waterfall requests
@@ -910,8 +910,6 @@ const App: React.FC = () => {
                                         concurrencyLimit: 1
                                     }}
                                     onGenerationConfigChange={(config) => updateStateAndRecord(s => ({ ...s, generationConfig: config }))}
-                                    imageOutputFormat={state.imageOutputFormat || 'jpeg'}
-                                    onImageOutputFormatChange={(format) => updateStateAndRecord(s => ({ ...s, imageOutputFormat: format }))}
                                 />
 
 

@@ -179,7 +179,6 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
     const [videoZoneEnabled, setVideoZoneEnabled] = useState(false);
     const [videoZoneScenes, setVideoZoneScenes] = useState(25);   // AI video clips (~8s each)
     const [staticZoneScenes, setStaticZoneScenes] = useState(35);  // Static image frames
-    const [enableBRoll, setEnableBRoll] = useState(false); // B-Roll expansion (OFF by default to reduce output size)
 
     // Research Notes state
     const [showResearchNotes, setShowResearchNotes] = useState(false);
@@ -199,7 +198,7 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
     const { presets, isLoading: presetsLoading, savePreset, deletePreset } = useResearchPresets(userId);
 
     // Analysis hook
-    const { isAnalyzing, analysisStage, analysisResult, analysisError, analysisLogs, analyzeScript, generateSceneMap, setAnalysisResult } = useScriptAnalysis(userApiKey);
+    const { isAnalyzing, analysisStage, analysisResult, analysisError, analyzeScript, generateSceneMap, setAnalysisResult } = useScriptAnalysis(userApiKey);
 
     // Track if user manually went back (to prevent auto-restore)
     const userWentBack = React.useRef(false);
@@ -344,10 +343,9 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
                 enabled: true,
                 videoScenes: videoZoneScenes,
                 staticScenes: staticZoneScenes
-            } : undefined,
-            enableBRoll // B-Roll expansion toggle
+            } : undefined
         );
-    }, [scriptText, readingSpeed, selectedModel, analyzeScript, selectedStyle, selectedDirector, directorNotes, dopNotes, storyContext, sceneCountEstimate, videoZoneEnabled, videoZoneScenes, staticZoneScenes, enableBRoll]);
+    }, [scriptText, readingSpeed, selectedModel, analyzeScript, selectedStyle, selectedDirector, directorNotes, dopNotes, storyContext, sceneCountEstimate, videoZoneEnabled, videoZoneScenes, staticZoneScenes]);
 
     // Handle import
     const handleImport = useCallback(() => {
@@ -462,74 +460,44 @@ export const ManualScriptModal: React.FC<ManualScriptModalProps> = ({
 
                 {/* Content */}
                 <div className="flex-1 px-8 py-6 overflow-y-auto custom-scrollbar relative">
-                    {/* Detailed Loading Overlay with Live Logs */}
+                    {/* Detailed Loading Overlay (NEW) */}
                     {isAnalyzing && (
-                        <div className="absolute inset-0 bg-zinc-900/90 backdrop-blur-md z-40 flex flex-col items-center justify-center p-8 animate-fade-in">
-                            <div className="w-full max-w-lg">
-                                {/* Header */}
-                                <div className="flex items-center gap-3 mb-4">
-                                    <div className="w-10 h-10 border-3 border-violet-500/20 border-t-violet-500 rounded-full animate-spin" />
-                                    <div>
-                                        <h3 className="text-lg font-bold text-white">Đang phân tích kịch bản</h3>
-                                        <p className="text-xs text-zinc-400">
-                                            {(() => {
-                                                if (analysisStage?.startsWith('retry')) return `⏳ ${analysisStage.includes('batch') ? `Retry Batch ${analysisStage.split('-').pop()}` : `Retry lần ${analysisStage.split('-').pop()}`} — API đang quá tải...`;
-                                                switch (analysisStage) {
-                                                    case 'preparing': return 'Chuẩn bị bối cảnh...';
-                                                    case 'dialogue-detection': return '🔍 Phát hiện thoại nhân vật...';
-                                                    case 'connecting': return '🔗 Đang gửi đến Gemini AI...';
-                                                    case 'clustering': return '🎨 AI đang gom cụm hình ảnh...';
-                                                    case 'thinking': return '🧠 AI đang xây dựng JSON...';
-                                                    case 'post-processing': return '📋 Xử lý kết quả AI...';
-                                                    case 'validating': return '✅ Kiểm tra VO / Dialogue...';
-                                                    case 'finalizing': return '🎉 Hoàn tất!';
-                                                    default: return 'Đang xử lý...';
-                                                }
-                                            })()}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                {/* Progress Bar */}
-                                <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden mb-4">
-                                    <div
-                                        className="h-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all duration-700"
-                                        style={{
-                                            width: analysisStage === 'preparing' ? '5%' :
-                                                analysisStage === 'dialogue-detection' ? '10%' :
-                                                    analysisStage === 'connecting' ? '20%' :
-                                                        analysisStage?.startsWith('retry') ? '25%' :
-                                                            analysisStage === 'clustering' ? '45%' :
-                                                                analysisStage === 'thinking' ? '65%' :
-                                                                    analysisStage === 'post-processing' ? '80%' :
-                                                                        analysisStage === 'validating' ? '92%' :
-                                                                            analysisStage === 'finalizing' ? '98%' : '0%'
-                                        }}
-                                    />
-                                </div>
-
-                                {/* Live Logs */}
-                                <div className="bg-zinc-950/80 border border-zinc-800 rounded-xl p-3 max-h-[280px] overflow-y-auto custom-scrollbar"
-                                    ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
-                                    {analysisLogs.length === 0 ? (
-                                        <p className="text-xs text-zinc-600 italic">Đang khởi tạo...</p>
-                                    ) : (
-                                        analysisLogs.map((log, i) => (
-                                            <div key={i} className="flex gap-2 text-xs py-0.5 font-mono">
-                                                <span className="text-zinc-600 shrink-0">{log.time}</span>
-                                                <span className={
-                                                    log.type === 'error' ? 'text-red-400' :
-                                                        log.type === 'warn' ? 'text-amber-400' :
-                                                            log.type === 'success' ? 'text-emerald-400' :
-                                                                'text-zinc-300'
-                                                }>{log.msg}</span>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
-
-                                <p className="text-[10px] text-zinc-600 mt-3 text-center uppercase tracking-widest">Stage: {analysisStage}</p>
+                        <div className="absolute inset-0 bg-zinc-900/80 backdrop-blur-md z-40 flex flex-col items-center justify-center p-8 text-center animate-fade-in">
+                            <div className="w-16 h-16 border-4 border-violet-500/20 border-t-violet-500 rounded-full animate-spin mb-6" />
+                            <h3 className="text-xl font-bold text-white mb-2">Đang phân tích kịch bản</h3>
+                            <div className="text-zinc-400 text-sm max-w-sm mb-6 h-10">
+                                {(() => {
+                                    switch (analysisStage) {
+                                        case 'preparing': return 'Đang chuẩn bị bối cảnh và phân tích độ dài kịch bản...';
+                                        case 'dialogue-detection': return '🔍 Đang phát hiện thoại nhân vật (Dialogue Detection)...';
+                                        case 'connecting': return 'Đang kết nối với hệ thống Gemini 3 Deep Thinking...';
+                                        case 'clustering': return 'AI Director đang gom cụm chi tiết hình ảnh (Visual Clustering)...';
+                                        case 'thinking': return 'AI Director đang chuyển giao scene list cho DOP để đóng gói JSON...';
+                                        case 'post-processing': return 'Đang xử lý dữ liệu AI và xây dựng cấu trúc Storyboard...';
+                                        case 'validating': return '✅ Đang kiểm tra phân tách Voice-Over / Dialogue...';
+                                        case 'finalizing': return 'Đang hoàn tất các bước cuối cùng...';
+                                        default: return 'Đang xử lý...';
+                                    }
+                                })()}
                             </div>
+
+                            {/* Simple Progress Indicator */}
+                            <div className="w-64 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all duration-500"
+                                    style={{
+                                        width: analysisStage === 'preparing' ? '5%' :
+                                            analysisStage === 'dialogue-detection' ? '15%' :
+                                                analysisStage === 'connecting' ? '25%' :
+                                                    analysisStage === 'clustering' ? '45%' :
+                                                        analysisStage === 'thinking' ? '65%' :
+                                                            analysisStage === 'post-processing' ? '80%' :
+                                                                analysisStage === 'validating' ? '92%' :
+                                                                    analysisStage === 'finalizing' ? '98%' : '0%'
+                                    }}
+                                />
+                            </div>
+                            <p className="text-[10px] text-zinc-500 mt-4 uppercase tracking-widest">Giai đoạn: {analysisStage}</p>
                         </div>
                     )}
                     {!analysisResult ? (
@@ -823,24 +791,6 @@ John enters the room, wearing a tailored Armani suit..."
                                     <div className="flex items-center gap-2 mb-3">
                                         <Layers className="w-4 h-4 text-emerald-400" />
                                         <span className="text-sm font-bold text-white uppercase tracking-wider">Scene Breakdown</span>
-                                    </div>
-
-                                    {/* B-Roll Toggle */}
-                                    <div className="flex items-center justify-between mb-3">
-                                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                                            <div
-                                                onClick={() => setEnableBRoll(!enableBRoll)}
-                                                className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${enableBRoll ? 'bg-amber-500' : 'bg-zinc-700'
-                                                    }`}
-                                            >
-                                                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${enableBRoll ? 'translate-x-5' : 'translate-x-0.5'
-                                                    }`} />
-                                            </div>
-                                            <span className="text-xs font-medium text-zinc-300">B-Roll Expansion</span>
-                                        </label>
-                                        <span className="text-[10px] text-zinc-500">
-                                            {enableBRoll ? '⚠️ Tăng output, có thể bị cắt' : '✅ Compact mode'}
-                                        </span>
                                     </div>
 
                                     {/* Video Zone Toggle */}
@@ -1255,19 +1205,6 @@ John enters the room, wearing a tailored Armani suit..."
                                     </div>
                                 </div>
                             </div>
-
-                            {/* Truncation Warning */}
-                            {(analysisResult as any)?._truncationWarning && (
-                                <div className="flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-400">
-                                    <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-                                    <div>
-                                        <div className="text-sm font-medium">{(analysisResult as any)._truncationWarning}</div>
-                                        {(analysisResult as any)._truncationTip && (
-                                            <div className="text-xs text-amber-400/70 mt-1">{(analysisResult as any)._truncationTip}</div>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
 
                             {/* Chapters */}
                             <div>

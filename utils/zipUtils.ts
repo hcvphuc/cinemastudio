@@ -62,118 +62,143 @@ export const handleDownloadAll = async (state: ProjectState) => {
         return;
     }
 
-    const zip = new JSZip();
-    const scenesFolder = zip.folder("Scenes");
-    const assetsFolder = zip.folder("Assets");
-    const charsFolder = assetsFolder?.folder("Characters");
-    const productsFolder = assetsFolder?.folder("Products");
-    const docsFolder = zip.folder("Docs");
+    const scenes = state.scenes || [];
+    const characters = state.characters || [];
+    const products = state.products || [];
+    const projectSlug = state.projectName ? slugify(state.projectName) : 'project';
 
-    let fileCount = 0;
-
-    // 0. Include Script Text
-    const scenes = state.scenes || []; // Defensive
-    const scriptContent = scenes.map(s => `[SCENE ${s.sceneNumber}] ${s.voiceOverText}`).join('\n\n');
-    docsFolder?.file("script_voiceover.txt", scriptContent);
-
-    // 1. SCENE MAP IMAGES
-    const scenePromises = scenes.map(async (scene, idx) => {
-        if (scene.generatedImage) {
-            const img = await prepareImageForZip(scene.generatedImage);
-            if (img) {
-                // Use index + sceneNumber for unique filenames (sceneNumber may be empty!)
-                const sceneKey = scene.sceneNumber || scene.id || `idx${idx}`;
-                const options = typeof img.data === 'string' ? { base64: true } : {};
-                scenesFolder?.file(`${String(idx + 1).padStart(3, '0')}_${sceneKey}.${img.ext}`, img.data, options);
-                fileCount++;
-            }
-        }
-    });
-
-    // 2. ASSETS - Characters
-    const characters = state.characters || []; // Defensive
-    const charPromises = characters.map(async (c) => {
-        const cName = slugify(c.name) || c.id;
-        const charImages = [
-            { key: 'master', img: c.masterImage },
-            { key: 'sheet', img: c.characterSheet },
-            { key: 'face', img: c.faceImage },
-            { key: 'body', img: c.bodyImage },
-            { key: 'side', img: c.sideImage },
-            { key: 'back', img: c.backImage },
-        ];
-
-        for (const item of charImages) {
-            if (item.img) {
-                const img = await prepareImageForZip(item.img);
-                if (img) {
-                    const options = typeof img.data === 'string' ? { base64: true } : {};
-                    charsFolder?.file(`${cName}_${item.key}.${img.ext}`, img.data, options);
-                    fileCount++;
-                }
-            }
-        }
-    });
-
-    // 3. ASSETS - Products
-    const products = state.products || []; // Defensive
-    const prodPromises = products.map(async (p) => {
-        const pName = slugify(p.name) || p.id;
-
-        // Master image
-        if (p.masterImage) {
-            const img = await prepareImageForZip(p.masterImage);
-            if (img) {
-                const options = typeof img.data === 'string' ? { base64: true } : {};
-                productsFolder?.file(`${pName}_master.${img.ext}`, img.data, options);
-                fileCount++;
-            }
-        }
-
-        // Views
-        if (p.views) {
-            const viewImages = [
-                { key: 'front', img: p.views.front },
-                { key: 'back', img: p.views.back },
-                { key: 'left', img: p.views.left },
-                { key: 'right', img: p.views.right },
-                { key: 'top', img: p.views.top },
-            ];
-            for (const item of viewImages) {
-                if (item.img) {
-                    const img = await prepareImageForZip(item.img);
-                    if (img) {
-                        const options = typeof img.data === 'string' ? { base64: true } : {};
-                        productsFolder?.file(`${pName}_${item.key}.${img.ext}`, img.data, options);
-                        fileCount++;
-                    }
-                }
-            }
-        }
-    });
-
-    // Wait for all fetches
-    await Promise.all([...scenePromises, ...charPromises, ...prodPromises]);
-
-    if (fileCount === 0) {
-        alert("Không tìm thấy ảnh nào (Scenes/Characters/Products) để tải xuống.");
-        return;
-    }
-
-    // Generate and download
-    try {
-        const content = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
-        const filename = state.projectName ? `${slugify(state.projectName)}_full.zip` : 'project-assets.zip';
+    // Helper: download a zip blob
+    const downloadZipBlob = (content: Blob, filename: string) => {
         const link = document.createElement('a');
         link.href = URL.createObjectURL(content);
         link.download = filename;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        URL.revokeObjectURL(link.href);
+        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    };
+
+    // Helper: add scenes to a zip folder
+    const addScenesToZip = async (scenesSubset: typeof scenes, startIdx: number, folder: any) => {
+        let count = 0;
+        for (let i = 0; i < scenesSubset.length; i++) {
+            const scene = scenesSubset[i];
+            if (scene.generatedImage) {
+                const img = await prepareImageForZip(scene.generatedImage);
+                if (img) {
+                    const globalIdx = startIdx + i;
+                    const sceneKey = scene.sceneNumber || scene.id || `idx${globalIdx}`;
+                    const options = typeof img.data === 'string' ? { base64: true } : {};
+                    folder?.file(`${String(globalIdx + 1).padStart(3, '0')}_${sceneKey}.${img.ext}`, img.data, options);
+                    count++;
+                }
+            }
+        }
+        return count;
+    };
+
+    // Helper: add character/product assets
+    const addAssetsToZip = async (zip: any) => {
+        const assetsFolder = zip.folder("Assets");
+        const charsFolder = assetsFolder?.folder("Characters");
+        const productsFolder = assetsFolder?.folder("Products");
+        let count = 0;
+
+        for (const c of characters) {
+            const cName = slugify(c.name) || c.id;
+            const charImages = [
+                { key: 'master', img: c.masterImage },
+                { key: 'sheet', img: c.characterSheet },
+                { key: 'face', img: c.faceImage },
+                { key: 'body', img: c.bodyImage },
+                { key: 'side', img: c.sideImage },
+                { key: 'back', img: c.backImage },
+            ];
+            for (const item of charImages) {
+                if (item.img) {
+                    const img = await prepareImageForZip(item.img);
+                    if (img) {
+                        const options = typeof img.data === 'string' ? { base64: true } : {};
+                        charsFolder?.file(`${cName}_${item.key}.${img.ext}`, img.data, options);
+                        count++;
+                    }
+                }
+            }
+        }
+
+        for (const p of products) {
+            const pName = slugify(p.name) || p.id;
+            if (p.masterImage) {
+                const img = await prepareImageForZip(p.masterImage);
+                if (img) {
+                    const options = typeof img.data === 'string' ? { base64: true } : {};
+                    productsFolder?.file(`${pName}_master.${img.ext}`, img.data, options);
+                    count++;
+                }
+            }
+            if (p.views) {
+                for (const [key, viewImg] of Object.entries(p.views)) {
+                    if (viewImg) {
+                        const img = await prepareImageForZip(viewImg as string);
+                        if (img) {
+                            const options = typeof img.data === 'string' ? { base64: true } : {};
+                            productsFolder?.file(`${pName}_${key}.${img.ext}`, img.data, options);
+                            count++;
+                        }
+                    }
+                }
+            }
+        }
+        return count;
+    };
+
+    // Split scenes into 2 halves
+    const mid = Math.ceil(scenes.length / 2);
+    const scenesA = scenes.slice(0, mid);
+    const scenesB = scenes.slice(mid);
+
+    try {
+        // === ZIP Part 1: First half of scenes + Assets ===
+        const zip1 = new JSZip();
+        const scenesFolder1 = zip1.folder("Scenes");
+        const docsFolder1 = zip1.folder("Docs");
+
+        const scriptContent = scenes.map(s => `[SCENE ${s.sceneNumber}] ${s.voiceOverText}`).join('\n\n');
+        docsFolder1?.file("script_voiceover.txt", scriptContent);
+
+        const sceneCount1 = await addScenesToZip(scenesA, 0, scenesFolder1);
+        const assetCount = await addAssetsToZip(zip1);
+
+        if (sceneCount1 + assetCount === 0) {
+            alert("Không tìm thấy ảnh nào để tải xuống.");
+            return;
+        }
+
+        console.log(`[ZIP] Part 1: ${sceneCount1} scenes + ${assetCount} assets`);
+        const content1 = await zip1.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+        downloadZipBlob(content1, `${projectSlug}_Part1_Scenes1-${mid}.zip`);
+
+        // === ZIP Part 2: Second half of scenes (only if exists) ===
+        if (scenesB.length > 0) {
+            // Small delay to avoid browser blocking multiple downloads
+            await new Promise(r => setTimeout(r, 800));
+
+            const zip2 = new JSZip();
+            const scenesFolder2 = zip2.folder("Scenes");
+
+            const sceneCount2 = await addScenesToZip(scenesB, mid, scenesFolder2);
+            if (sceneCount2 > 0) {
+                console.log(`[ZIP] Part 2: ${sceneCount2} scenes`);
+                const content2 = await zip2.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+                downloadZipBlob(content2, `${projectSlug}_Part2_Scenes${mid + 1}-${scenes.length}.zip`);
+            }
+        }
+
+        alert(`✅ Đã tải ${scenesB.length > 0 ? '2 file ZIP' : '1 file ZIP'} thành công!`);
+
     } catch (e: any) {
         console.error('ZIP generation failed:', e);
-        alert(`Lỗi tạo ZIP: ${e.message || e}. Dự án quá lớn — thử xóa bớt ảnh cũ hoặc dùng Save Project thay vì Download All.`);
+        alert(`Lỗi tạo ZIP: ${e.message || e}. Thử xóa bớt ảnh cũ hoặc dùng Save Project.`);
     }
 };
 
@@ -312,20 +337,29 @@ export const saveProjectPackage = async (state: ProjectState) => {
         zip.file("project.json", JSON.stringify(safeState, null, 2));
 
         // 7. Save Read-only Script
-        // Defensive access for script content as well
         const scriptContent = (state.scenes || []).map(s => `[SCENE ${s.sceneNumber}] ${s.voiceOverText || ''}`).join('\n\n');
         zip.file("script_voiceover.txt", scriptContent);
 
-        // Download
-        const content = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
-        const filename = state.projectName ? `${slugify(state.projectName)}_PROJECT.zip` : 'project_package.zip';
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(content);
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(link.href);
+        // Download — use streamFiles to reduce memory peak
+        try {
+            const content = await zip.generateAsync({
+                type: "blob",
+                compression: "DEFLATE",
+                compressionOptions: { level: 6 },
+                streamFiles: true  // Process files one at a time to reduce memory
+            });
+            const filename = state.projectName ? `${slugify(state.projectName)}_PROJECT.zip` : 'project_package.zip';
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+        } catch (zipError: any) {
+            console.error("ZIP generation failed:", zipError);
+            alert(`Lỗi tạo ZIP: ${zipError.message || zipError}.\nDự án quá lớn — thử dùng "Download All" (sẽ tự tách 2 file ZIP nhỏ hơn).`);
+        }
 
     } catch (error) {
         console.error("Failed to save project package:", error);
